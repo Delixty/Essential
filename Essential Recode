@@ -1,5 +1,5 @@
 -- Essential GUI - Stable + NOCLIP + STRETCHED RES + ESSENTIAL HUD + HOOK ESP + CUSTOM FOG + CROSSHAIR + GATE ESP + NAME ESP + STAFF TAGS
--- [FINAL] Low Graphics Added, NoStopEmote Removed, Gen Labels Removed, Lobby Check
+-- [FIX] Skybox enforce + StaffTags independent + LowGFX full restore + FOV triple-lock + Moonwalk in-game
 local Players = game:GetService("Players")
 local RunService = game:GetService("RunService")
 local UserInputService = game:GetService("UserInputService")
@@ -32,21 +32,28 @@ local Settings = {
     Noclip = false,
     Stretch = false, StretchPreset = "16:9 (Default)", StretchCustom = 100,
     SkyEnabled = false, SkyBright = 50, SkyExp = 50, SkyR = 100, SkyG = 160, SkyB = 255,
-    HorR = 200, HorG = 220, HorB = 255, SkyPreset = "Default",
+    HorR = 200, HorG = 220, HorB = 255, SkyPreset = "Default", SkyClock = 14,
     HUDEnabled = false, HUDFPS = true, HUDPing = true, HUDKiller = true,
     StaffTags = false,
-    
+
     -- Low Graphics Settings
     LowGraphics = false,
     TextureQuality = "Balanced", -- Performance, Balanced, Quality
-    
+
+    -- Auto Moonwalk
+    Moonwalk = false, MoonwalkAngle = 18, MoonwalkSpeed = 22, MoonwalkAlways = false,
+
+    -- Menu keybind (string name of Enum.KeyCode, or "None")
+    MenuKeybind = "RightShift",
+
     DeviceMode = "PC", AccentR = 168, AccentG = 85, AccentB = 247
 }
 
 local StaffList = {
     ["MilkDark1999"] = "Dev",
     ["TimmyMartyn"] = "Tester",
-    ["xbsjbjdb"] = "Tester"
+    ["xbsjbjdb"] = "Tester",
+    ["DympyCay135"] = "Tester"
 }
 
 local function ApplyTheme()
@@ -85,13 +92,18 @@ local noclipOriginalCollide = {}
 local noclipConnection = nil
 local DefaultSky = nil
 local CustomSky = nil
+local DefaultAtmosphere = Lighting:FindFirstChildWhichIsA("Atmosphere")
+-- Technology can be security-restricted in normal LocalScripts. Never read it
+-- directly during startup, otherwise one protected property kills the whole UI.
+local savedTechnology = nil
+pcall(function() savedTechnology = Lighting.Technology end)
 local DefaultLighting = {
     Brightness = Lighting.Brightness, ExposureCompensation = Lighting.ExposureCompensation,
     Ambient = Lighting.Ambient, OutdoorAmbient = Lighting.OutdoorAmbient,
     ColorShift_Top = Lighting.ColorShift_Top, ColorShift_Bottom = Lighting.ColorShift_Bottom,
     ClockTime = Lighting.ClockTime, FogColor = Lighting.FogColor,
     FogStart = Lighting.FogStart, FogEnd = Lighting.FogEnd,
-    GlobalShadows = Lighting.GlobalShadows, Technology = Lighting.Technology
+    GlobalShadows = Lighting.GlobalShadows, Technology = savedTechnology
 }
 local _skyboxApplying = false
 local skyboxGuardConnections = {}
@@ -103,39 +115,232 @@ local trackedGates = {}
 local MAX_ESP_DISTANCE = 100
 
 -- ==============================================
--- LOW GRAPHICS SYSTEM
+-- LOW GRAPHICS SYSTEM (Performance = soapy / smooth textures + 100% full restore)
 -- ==============================================
+local HiddenPBRFolder = Instance.new("Folder")
+HiddenPBRFolder.Name = "EssentialHiddenPBR"
+
 local LowGraphicsState = {
     Applied = false,
+    BlurApplied = false,
     SavedQuality = nil,
+    SavedMeshDetail = nil,
+    SavedTextureQuality = nil,
     SavedGlobalShadows = nil,
     SavedTechnology = nil,
     PostEffects = {},
-    ModifiedParts = setmetatable({}, { __mode = "k" })
+    -- Strong tables so Luau GC NEVER collects detached SurfaceAppearances or original TextureIDs
+    OriginalMaterial = {},
+    OriginalMaterialVariant = {},
+    OriginalReflectance = {},
+    OriginalMeshTextureID = {},
+    OriginalMeshLOD = {},
+    OriginalMeshFidelity = {},
+    OriginalSpecialMeshTex = {},
+    OriginalDecalTrans = {},
+    HiddenSurfaceApps = {},
+    Terrain = nil
 }
 
 pcall(function() LowGraphicsState.SavedQuality = settings().Rendering.QualityLevel end)
-pcall(function() LowGraphicsState.SavedTechnology = Lighting.Technology end)
+pcall(function() LowGraphicsState.SavedMeshDetail = settings().Rendering.MeshPartDetailLevel end)
+pcall(function()
+    if settings().Rendering and settings().Rendering.TextureQuality ~= nil then
+        LowGraphicsState.SavedTextureQuality = settings().Rendering.TextureQuality
+    end
+end)
+LowGraphicsState.SavedTechnology = savedTechnology
 LowGraphicsState.SavedGlobalShadows = Lighting.GlobalShadows
 
 local function GetTextureProfile(mode)
     if mode == "Performance" then
-        return { Quality = Enum.QualityLevel.Level01, MeshDetail = "Level01", LOD = 4, Shadows = false, Tech = Enum.Technology.Legacy }
+        return { Quality = Enum.QualityLevel.Level01, MeshDetail = "Level01", LOD = 8, Shadows = false, Tech = Enum.Technology.Legacy, Blur = true }
     elseif mode == "Quality" then
-        return { Quality = Enum.QualityLevel.Level05, MeshDetail = "Level03", LOD = 0, Shadows = true, Tech = Enum.Technology.ShadowMap }
+        return { Quality = Enum.QualityLevel.Level05, MeshDetail = "Level03", LOD = 0, Shadows = true, Tech = Enum.Technology.ShadowMap, Blur = false }
     else -- Balanced
-        return { Quality = Enum.QualityLevel.Level03, MeshDetail = "Level02", LOD = 2, Shadows = false, Tech = Enum.Technology.Legacy }
+        return { Quality = Enum.QualityLevel.Level03, MeshDetail = "Level02", LOD = 2, Shadows = false, Tech = Enum.Technology.Legacy, Blur = false }
     end
+end
+
+local function IsCharacterPart(part)
+    local cur = part.Parent
+    while cur and cur ~= workspace and cur ~= game do
+        if cur:FindFirstChildOfClass("Humanoid") then return true end
+        cur = cur.Parent
+    end
+    return false
+end
+
+local function SaveAndBlurObject(obj)
+    if not obj or not obj.Parent then return end
+    if obj:IsA("BasePart") then
+        if IsCharacterPart(obj) then return end
+        if LowGraphicsState.OriginalMaterial[obj] == nil then
+            pcall(function() LowGraphicsState.OriginalMaterial[obj] = obj.Material end)
+        end
+        if LowGraphicsState.OriginalMaterialVariant[obj] == nil then
+            pcall(function() LowGraphicsState.OriginalMaterialVariant[obj] = obj.MaterialVariant end)
+        end
+        if LowGraphicsState.OriginalReflectance[obj] == nil then
+            pcall(function() LowGraphicsState.OriginalReflectance[obj] = obj.Reflectance end)
+        end
+        pcall(function() obj.Material = Enum.Material.SmoothPlastic end)
+        pcall(function() obj.MaterialVariant = "" end)
+        pcall(function() obj.Reflectance = 0 end)
+        if obj:IsA("MeshPart") then
+            if LowGraphicsState.OriginalMeshTextureID[obj] == nil then
+                pcall(function() LowGraphicsState.OriginalMeshTextureID[obj] = obj.TextureID end)
+            end
+            if LowGraphicsState.OriginalMeshLOD[obj] == nil then
+                pcall(function() LowGraphicsState.OriginalMeshLOD[obj] = obj.TextureLODBias end)
+            end
+            if LowGraphicsState.OriginalMeshFidelity[obj] == nil then
+                pcall(function() LowGraphicsState.OriginalMeshFidelity[obj] = obj.RenderFidelity end)
+            end
+            pcall(function() obj.TextureID = "" end)
+            pcall(function() obj.TextureLODBias = 8 end)
+            pcall(function() obj.RenderFidelity = Enum.RenderFidelity.Performance end)
+        end
+    elseif obj:IsA("SpecialMesh") then
+        if obj.Parent and IsCharacterPart(obj.Parent) then return end
+        if LowGraphicsState.OriginalSpecialMeshTex[obj] == nil then
+            pcall(function() LowGraphicsState.OriginalSpecialMeshTex[obj] = obj.TextureId end)
+        end
+        pcall(function() obj.TextureId = "" end)
+    elseif obj:IsA("SurfaceAppearance") then
+        if obj.Parent and obj.Parent ~= HiddenPBRFolder then
+            if IsCharacterPart(obj.Parent) then return end
+            if LowGraphicsState.HiddenSurfaceApps[obj] == nil then
+                LowGraphicsState.HiddenSurfaceApps[obj] = obj.Parent
+            end
+            pcall(function() obj.Parent = HiddenPBRFolder end)
+        end
+    elseif obj:IsA("Decal") or obj:IsA("Texture") then
+        if obj.Parent and IsCharacterPart(obj.Parent) then return end
+        if LowGraphicsState.OriginalDecalTrans[obj] == nil then
+            pcall(function() LowGraphicsState.OriginalDecalTrans[obj] = obj.Transparency end)
+        end
+        pcall(function() obj.Transparency = 1 end)
+    end
+end
+
+local function ApplyTerrainBlur()
+    local terrain = workspace:FindFirstChildOfClass("Terrain")
+    if not terrain then return end
+    if not LowGraphicsState.Terrain then
+        local saved = {}
+        pcall(function() saved.Decoration = terrain.Decoration end)
+        pcall(function() saved.WaterWaveSize = terrain.WaterWaveSize end)
+        pcall(function() saved.WaterWaveSpeed = terrain.WaterWaveSpeed end)
+        pcall(function() saved.WaterReflectance = terrain.WaterReflectance end)
+        pcall(function() saved.WaterTransparency = terrain.WaterTransparency end)
+        LowGraphicsState.Terrain = saved
+    end
+    pcall(function()
+        terrain.Decoration = false
+        terrain.WaterWaveSize = 0
+        terrain.WaterWaveSpeed = 0
+        terrain.WaterReflectance = 0
+        terrain.WaterTransparency = 1
+    end)
+end
+
+local function RestoreTerrainBlur()
+    local terrain = workspace:FindFirstChildOfClass("Terrain")
+    local saved = LowGraphicsState.Terrain
+    if terrain and saved then
+        pcall(function()
+            if saved.Decoration ~= nil then terrain.Decoration = saved.Decoration end
+            if saved.WaterWaveSize ~= nil then terrain.WaterWaveSize = saved.WaterWaveSize end
+            if saved.WaterWaveSpeed ~= nil then terrain.WaterWaveSpeed = saved.WaterWaveSpeed end
+            if saved.WaterReflectance ~= nil then terrain.WaterReflectance = saved.WaterReflectance end
+            if saved.WaterTransparency ~= nil then terrain.WaterTransparency = saved.WaterTransparency end
+        end)
+    end
+    LowGraphicsState.Terrain = nil
+end
+
+local _blurWorkerRunning = false
+
+local function ApplyPerformanceBlur()
+    LowGraphicsState.BlurApplied = true
+    ApplyTerrainBlur()
+    if _blurWorkerRunning then return end
+    _blurWorkerRunning = true
+    task.spawn(function()
+        local objs = workspace:GetDescendants()
+        for i = 1, #objs do
+            if not Settings.LowGraphics or Settings.TextureQuality ~= "Performance" then break end
+            SaveAndBlurObject(objs[i])
+            -- Yield every 120 items so the main render thread never drops frames during blur
+            if i % 120 == 0 then task.wait() end
+        end
+        _blurWorkerRunning = false
+    end)
+end
+
+local function RestorePerformanceBlur()
+    LowGraphicsState.BlurApplied = false
+    _blurWorkerRunning = false
+
+    for part, mat in pairs(LowGraphicsState.OriginalMaterial) do
+        if part and part.Parent then pcall(function() part.Material = mat end) end
+    end
+    for part, mv in pairs(LowGraphicsState.OriginalMaterialVariant) do
+        if part and part.Parent then pcall(function() part.MaterialVariant = mv end) end
+    end
+    for part, ref in pairs(LowGraphicsState.OriginalReflectance) do
+        if part and part.Parent then pcall(function() part.Reflectance = ref end) end
+    end
+    for mesh, texId in pairs(LowGraphicsState.OriginalMeshTextureID) do
+        if mesh and mesh.Parent then pcall(function() mesh.TextureID = texId end) end
+    end
+    for mesh, lod in pairs(LowGraphicsState.OriginalMeshLOD) do
+        if mesh and mesh.Parent then pcall(function() mesh.TextureLODBias = lod end) end
+    end
+    for mesh, fid in pairs(LowGraphicsState.OriginalMeshFidelity) do
+        if mesh and mesh.Parent then pcall(function() mesh.RenderFidelity = fid end) end
+    end
+    for sm, texId in pairs(LowGraphicsState.OriginalSpecialMeshTex) do
+        if sm and sm.Parent then pcall(function() sm.TextureId = texId end) end
+    end
+    for sa, origParent in pairs(LowGraphicsState.HiddenSurfaceApps) do
+        if sa and origParent and origParent.Parent then
+            pcall(function() sa.Parent = origParent end)
+        end
+    end
+    for dec, trans in pairs(LowGraphicsState.OriginalDecalTrans) do
+        if dec and dec.Parent then pcall(function() dec.Transparency = trans end) end
+    end
+
+    LowGraphicsState.OriginalMaterial = {}
+    LowGraphicsState.OriginalMaterialVariant = {}
+    LowGraphicsState.OriginalReflectance = {}
+    LowGraphicsState.OriginalMeshTextureID = {}
+    LowGraphicsState.OriginalMeshLOD = {}
+    LowGraphicsState.OriginalMeshFidelity = {}
+    LowGraphicsState.OriginalSpecialMeshTex = {}
+    LowGraphicsState.HiddenSurfaceApps = {}
+    LowGraphicsState.OriginalDecalTrans = {}
+
+    RestoreTerrainBlur()
 end
 
 local function ApplyLowTextureToObject(obj)
     if not Settings.LowGraphics then return end
     if not obj or not obj.Parent then return end
-    
-    if obj:IsA("MeshPart") then
-        local profile = GetTextureProfile(Settings.TextureQuality)
-        local ok = pcall(function() obj.TextureLODBias = profile.LOD end)
-        if ok then LowGraphicsState.ModifiedParts[obj] = true end
+    local profile = GetTextureProfile(Settings.TextureQuality)
+
+    if profile.Blur then
+        SaveAndBlurObject(obj)
+    elseif obj:IsA("MeshPart") then
+        if LowGraphicsState.OriginalMeshLOD[obj] == nil then
+            pcall(function() LowGraphicsState.OriginalMeshLOD[obj] = obj.TextureLODBias end)
+        end
+        if LowGraphicsState.OriginalMeshFidelity[obj] == nil then
+            pcall(function() LowGraphicsState.OriginalMeshFidelity[obj] = obj.RenderFidelity end)
+        end
+        pcall(function() obj.TextureLODBias = profile.LOD end)
         pcall(function() obj.RenderFidelity = Enum.RenderFidelity.Performance end)
     end
 end
@@ -143,7 +348,7 @@ end
 local function DisablePostEffects(parent)
     if not parent then return end
     for _, obj in ipairs(parent:GetDescendants()) do
-        if obj:IsA("PostEffect") then
+        if obj:IsA("PostEffect") and obj.Name ~= "EssentialSkyCC" then
             if LowGraphicsState.PostEffects[obj] == nil then LowGraphicsState.PostEffects[obj] = obj.Enabled end
             pcall(function() obj.Enabled = false end)
         end
@@ -153,47 +358,72 @@ end
 local function ApplyLowGraphics()
     if not Settings.LowGraphics then return end
     local profile = GetTextureProfile(Settings.TextureQuality)
-    
+
     pcall(function() settings().Rendering.QualityLevel = profile.Quality end)
     pcall(function() settings().Rendering.MeshPartDetailLevel = Enum.MeshPartDetailLevel[profile.MeshDetail] end)
-    pcall(function() settings().Rendering.TextureQuality = Enum.TextureQuality.Low end)
-    
-    pcall(function() Lighting.GlobalShadows = profile.Shadows end)
-    pcall(function() Lighting.Technology = profile.Tech end)
-    
-    DisablePostEffects(Lighting)
-    DisablePostEffects(workspace.CurrentCamera)
-    
-    task.spawn(function()
-        local objs = workspace:GetDescendants()
-        for i = 1, #objs do
-            ApplyLowTextureToObject(objs[i])
-            if i % 1500 == 0 then task.wait() end
+    pcall(function()
+        if Enum.TextureQuality then
+            settings().Rendering.TextureQuality = profile.Blur and Enum.TextureQuality.Low or Enum.TextureQuality.Automatic
         end
     end)
-    
+
+    pcall(function() Lighting.GlobalShadows = profile.Shadows end)
+    pcall(function() Lighting.Technology = profile.Tech end)
+
+    DisablePostEffects(Lighting)
+    DisablePostEffects(workspace.CurrentCamera)
+
+    if profile.Blur then
+        ApplyPerformanceBlur()
+    else
+        RestorePerformanceBlur()
+        task.spawn(function()
+            local objs = workspace:GetDescendants()
+            for i = 1, #objs do
+                if not Settings.LowGraphics or Settings.TextureQuality == "Performance" then break end
+                local o = objs[i]
+                if o:IsA("MeshPart") then
+                    if LowGraphicsState.OriginalMeshLOD[o] == nil then
+                        pcall(function() LowGraphicsState.OriginalMeshLOD[o] = o.TextureLODBias end)
+                    end
+                    if LowGraphicsState.OriginalMeshFidelity[o] == nil then
+                        pcall(function() LowGraphicsState.OriginalMeshFidelity[o] = o.RenderFidelity end)
+                    end
+                    pcall(function() o.TextureLODBias = profile.LOD end)
+                    pcall(function() o.RenderFidelity = Enum.RenderFidelity.Performance end)
+                end
+                if i % 1500 == 0 then task.wait() end
+            end
+        end)
+    end
+
     LowGraphicsState.Applied = true
 end
 
 local function RestoreLowGraphics()
-    if not LowGraphicsState.Applied then return end
-    
+    RestorePerformanceBlur()
+
     pcall(function() settings().Rendering.QualityLevel = LowGraphicsState.SavedQuality or Enum.QualityLevel.Automatic end)
-    pcall(function() settings().Rendering.MeshPartDetailLevel = Enum.MeshPartDetailLevel.Level04 end)
-    pcall(function() settings().Rendering.TextureQuality = Enum.TextureQuality.Automatic end)
-    
+    pcall(function()
+        if LowGraphicsState.SavedMeshDetail then
+            settings().Rendering.MeshPartDetailLevel = LowGraphicsState.SavedMeshDetail
+        else
+            settings().Rendering.MeshPartDetailLevel = Enum.MeshPartDetailLevel.Level04
+        end
+    end)
+    pcall(function()
+        if Enum.TextureQuality then
+            settings().Rendering.TextureQuality = LowGraphicsState.SavedTextureQuality or Enum.TextureQuality.Automatic
+        end
+    end)
+
     pcall(function() Lighting.GlobalShadows = LowGraphicsState.SavedGlobalShadows end)
     if LowGraphicsState.SavedTechnology then pcall(function() Lighting.Technology = LowGraphicsState.SavedTechnology end) end
-    
-    for obj, state in pairs(LowGraphicsState.PostEffects) do pcall(function() obj.Enabled = state end) end
-    LowGraphicsState.PostEffects = {}
-    
-    for part in pairs(LowGraphicsState.ModifiedParts) do
-        pcall(function() part.TextureLODBias = 0 end)
-        pcall(function() part.RenderFidelity = Enum.RenderFidelity.Automatic end)
+
+    for obj, state in pairs(LowGraphicsState.PostEffects) do
+        if obj and obj.Parent then pcall(function() obj.Enabled = state end) end
     end
-    LowGraphicsState.ModifiedParts = setmetatable({}, { __mode = "k" })
-    
+    LowGraphicsState.PostEffects = {}
     LowGraphicsState.Applied = false
 end
 
@@ -201,16 +431,123 @@ local function RefreshLowGraphics()
     if Settings.LowGraphics then ApplyLowGraphics() else RestoreLowGraphics() end
 end
 
+-- Throttle DescendantAdded during matches so rapid part spawning doesn't stutter the game
+local _pendingLowGFXQueue = {}
+local _pendingLowGFXScheduled = false
+
 table.insert(connections, workspace.DescendantAdded:Connect(function(obj)
-    if Settings.LowGraphics then ApplyLowTextureToObject(obj) end
+    if not Settings.LowGraphics then return end
+    table.insert(_pendingLowGFXQueue, obj)
+    if not _pendingLowGFXScheduled then
+        _pendingLowGFXScheduled = true
+        task.delay(0.2, function()
+            _pendingLowGFXScheduled = false
+            if not Settings.LowGraphics then _pendingLowGFXQueue = {} return end
+            local count = #_pendingLowGFXQueue
+            for i = 1, math.min(count, 80) do
+                local o = _pendingLowGFXQueue[i]
+                if o and o.Parent then ApplyLowTextureToObject(o) end
+            end
+            _pendingLowGFXQueue = {}
+        end)
+    end
 end))
 
 table.insert(connections, Lighting.ChildAdded:Connect(function(obj)
-    if Settings.LowGraphics and obj:IsA("PostEffect") then
+    if Settings.LowGraphics and obj:IsA("PostEffect") and obj.Name ~= "EssentialSkyCC" then
         if LowGraphicsState.PostEffects[obj] == nil then LowGraphicsState.PostEffects[obj] = obj.Enabled end
         pcall(function() obj.Enabled = false end)
     end
 end))
+
+-- ==============================================
+-- FOV LOCK SYSTEM v3 (Metatable __newindex hook + PreRender + task.defer + MaxPriority)
+-- ==============================================
+local DefaultFOV = 70
+pcall(function() if workspace.CurrentCamera then DefaultFOV = workspace.CurrentCamera.FieldOfView end end)
+if DefaultFOV <= 1 or DefaultFOV >= 120 then DefaultFOV = 70 end
+local _fovApplying = false
+local cameraFovConnection = nil
+local fovHeartbeatConn = nil
+local fovSteppedConn = nil
+local fovPreRenderConn = nil
+
+local function ForceFOV()
+    if not Settings.FOVEnabled then return end
+    local cam = workspace.CurrentCamera
+    if not cam then return end
+    if math.abs(cam.FieldOfView - Settings.FOV) > 0.005 then
+        _fovApplying = true
+        pcall(function() cam.FieldOfView = Settings.FOV end)
+        _fovApplying = false
+    end
+end
+
+local function HookCameraFOV(cam)
+    if cameraFovConnection then pcall(function() cameraFovConnection:Disconnect() end) cameraFovConnection = nil end
+    if not cam then return end
+    cameraFovConnection = cam:GetPropertyChangedSignal("FieldOfView"):Connect(function()
+        if _fovApplying or not Settings.FOVEnabled then return end
+        if math.abs(cam.FieldOfView - Settings.FOV) > 0.005 then
+            _fovApplying = true
+            pcall(function() cam.FieldOfView = Settings.FOV end)
+            _fovApplying = false
+        end
+    end)
+end
+
+-- Optional metatable __newindex interceptor (blocks flashlight/item TweenService writes at the source)
+pcall(function()
+    if hookmetamethod then
+        local oldNewIndex
+        oldNewIndex = hookmetamethod(game, "__newindex", function(self, key, val)
+            if Settings.FOVEnabled and not _fovApplying and key == "FieldOfView" and self == workspace.CurrentCamera then
+                return oldNewIndex(self, key, Settings.FOV)
+            end
+            return oldNewIndex(self, key, val)
+        end)
+    elseif getrawmetatable and setreadonly then
+        local mt = getrawmetatable(game)
+        if mt and mt.__newindex then
+            local oldNewIndex = mt.__newindex
+            setreadonly(mt, false)
+            mt.__newindex = function(self, key, val)
+                if Settings.FOVEnabled and not _fovApplying and key == "FieldOfView" and self == workspace.CurrentCamera then
+                    return oldNewIndex(self, key, Settings.FOV)
+                end
+                return oldNewIndex(self, key, val)
+            end
+            setreadonly(mt, true)
+        end
+    end
+end)
+
+HookCameraFOV(workspace.CurrentCamera)
+table.insert(connections, workspace:GetPropertyChangedSignal("CurrentCamera"):Connect(function()
+    HookCameraFOV(workspace.CurrentCamera)
+    ForceFOV()
+end))
+
+pcall(function()
+    RunService:BindToRenderStep("EssentialFOVLockEarly", Enum.RenderPriority.Camera.Value + 1, ForceFOV)
+end)
+pcall(function()
+    RunService:BindToRenderStep("EssentialFOVLock", 2147483640, ForceFOV)
+end)
+pcall(function()
+    if RunService.PreRender then
+        fovPreRenderConn = RunService.PreRender:Connect(function()
+            ForceFOV()
+            task.defer(ForceFOV)
+        end)
+        table.insert(connections, fovPreRenderConn)
+    end
+end)
+fovHeartbeatConn = RunService.Heartbeat:Connect(function() ForceFOV() end)
+table.insert(connections, fovHeartbeatConn)
+fovSteppedConn = RunService.Stepped:Connect(function() ForceFOV() end)
+table.insert(connections, fovSteppedConn)
+
 
 -- ==============================================
 -- UI SETUP
@@ -321,8 +658,22 @@ end))
 table.insert(connections, UserInputService.InputEnded:Connect(function(input)
     if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then dragging = false end
 end))
+
+-- =========== MENU KEYBIND (changeable from the gear / settings page) ===========
+local KeybindListening = false
+local function GetMenuKeyCode()
+    if not Settings.MenuKeybind or Settings.MenuKeybind == "None" then return nil end
+    local ok, key = pcall(function() return Enum.KeyCode[Settings.MenuKeybind] end)
+    if ok then return key end
+    return nil
+end
+
 table.insert(connections, UserInputService.InputBegan:Connect(function(input, gameProcessed)
-    if not gameProcessed and input.KeyCode == Enum.KeyCode.RightShift then ToggleMenu() end
+    if KeybindListening then return end
+    if not gameProcessed and input.UserInputType == Enum.UserInputType.Keyboard then
+        local bind = GetMenuKeyCode()
+        if bind and input.KeyCode == bind then ToggleMenu() end
+    end
     if not gameProcessed and input.KeyCode == Enum.KeyCode.Space then
         if Settings.Jumphack and LocalPlayer.Character then
             local hum = LocalPlayer.Character:FindFirstChildWhichIsA("Humanoid")
@@ -417,19 +768,24 @@ local function CreateSlider(parent, text, min, max, default, callback)
     if ShouldBeSearchable(parent) then table.insert(SearchableElements, {frame = frame, text = string.lower(text)}) end
     local dragging = false
     local touchID = nil
-    local function setVal(val) valLabel.Text = tostring(val) fill.Size = UDim2.new((val - min)/(max - min), 0, 1, 0) callback(val) end
-    btn.InputBegan:Connect(function(input) 
-        if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then dragging = true touchID = input end 
+    local function setVal(val, silent)
+        val = math.clamp(math.floor(tonumber(val) or default), min, max)
+        valLabel.Text = tostring(val)
+        fill.Size = UDim2.new((val - min)/(max - min), 0, 1, 0)
+        if not silent then callback(val) end
+    end
+    btn.InputBegan:Connect(function(input)
+        if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then dragging = true touchID = input end
     end)
-    btn.InputEnded:Connect(function(input) 
-        if input == touchID or input.UserInputType == Enum.UserInputType.MouseButton1 then dragging = false touchID = nil end 
+    btn.InputEnded:Connect(function(input)
+        if input == touchID or input.UserInputType == Enum.UserInputType.MouseButton1 then dragging = false touchID = nil end
     end)
     table.insert(connections, UserInputService.InputChanged:Connect(function(input)
         if dragging and (input == touchID or input.UserInputType == Enum.UserInputType.MouseMovement) then
             local mouseX = input.Position.X local barX = bar.AbsolutePosition.X local barSize = bar.AbsoluteSize.X
             local percent = math.clamp((mouseX - barX) / barSize, 0, 1) setVal(math.floor(min + (max - min) * percent))
         end
-    end)) 
+    end))
     return setVal
 end
 
@@ -444,6 +800,47 @@ local function CreateButton(parent, text, isAccent, callback)
     end
     if ShouldBeSearchable(parent) then table.insert(SearchableElements, {frame = btn, text = string.lower(text)}) end
     btn.MouseButton1Click:Connect(callback) return btn
+end
+
+-- =========== KEYBIND ELEMENT ===========
+local function CreateKeybind(parent, text, defaultKey, callback)
+    local frame = Instance.new("Frame", parent) frame.Size = UDim2.new(1, 0, 0, 42) frame.BackgroundColor3 = BgElement Instance.new("UICorner", frame).CornerRadius = UDim.new(0, 8)
+    local stroke = Instance.new("UIStroke", frame) stroke.Thickness = 1 table.insert(ThemeElements.DarkStrokes, stroke)
+    local label = Instance.new("TextLabel", frame) label.Size = UDim2.new(1, -140, 1, 0) label.Position = UDim2.new(0, 12, 0, 0) label.BackgroundTransparency = 1 label.Text = text label.TextColor3 = TextColor label.TextSize = 13 label.Font = Enum.Font.GothamSemibold label.TextXAlignment = Enum.TextXAlignment.Left
+    local keyBtn = Instance.new("TextButton", frame) keyBtn.Size = UDim2.new(0, 118, 0, 26) keyBtn.Position = UDim2.new(1, -130, 0.5, -13) keyBtn.BackgroundColor3 = BgDark keyBtn.Text = tostring(defaultKey) keyBtn.TextSize = 12 keyBtn.Font = Enum.Font.GothamBold Instance.new("UICorner", keyBtn).CornerRadius = UDim.new(0, 6)
+    table.insert(ThemeElements.Texts, keyBtn)
+    local keyStroke = Instance.new("UIStroke", keyBtn) keyStroke.Thickness = 1 table.insert(ThemeElements.DarkStrokes, keyStroke)
+    if ShouldBeSearchable(parent) then table.insert(SearchableElements, {frame = frame, text = string.lower(text)}) end
+
+    local listening = false
+    local function setKey(keyName)
+        keyName = tostring(keyName or "None")
+        keyBtn.Text = keyName
+        callback(keyName)
+    end
+    keyBtn.MouseButton1Click:Connect(function()
+        if listening then return end
+        listening = true
+        KeybindListening = true
+        keyBtn.Text = "Press any key..."
+    end)
+    table.insert(connections, UserInputService.InputBegan:Connect(function(input, gp)
+        if not listening then return end
+        if input.UserInputType ~= Enum.UserInputType.Keyboard then return end
+        local kc = input.KeyCode
+        listening = false
+        task.defer(function() KeybindListening = false end)
+        if kc == Enum.KeyCode.Escape then
+            setKey(Settings.MenuKeybind)
+        elseif kc == Enum.KeyCode.Backspace or kc == Enum.KeyCode.Delete then
+            setKey("None")
+        elseif kc ~= Enum.KeyCode.Unknown then
+            setKey(kc.Name)
+        else
+            setKey(Settings.MenuKeybind)
+        end
+    end))
+    return setKey
 end
 
 local function CreateInput(parent, placeholder, callback)
@@ -489,7 +886,11 @@ local function CreateDropdown(parent, text, options, default, callback)
     local optLayout = Instance.new("UIListLayout", optionHolder) optLayout.SortOrder = Enum.SortOrder.LayoutOrder optLayout.Padding = UDim.new(0, 4)
     if ShouldBeSearchable(parent) then table.insert(SearchableElements, {frame = frame, text = string.lower(text)}) end
     local isOpen = false local currentValue = default
-    local function setValue(val) currentValue = val selector.Text = "   " .. tostring(val) callback(val) end
+    local function setValue(val, silent)
+        currentValue = val
+        selector.Text = "   " .. tostring(val)
+        if not silent then callback(val) end
+    end
     for _, opt in ipairs(options) do
         local optBtn = Instance.new("TextButton", optionHolder) optBtn.Size = UDim2.new(1, 0, 0, 26) optBtn.BackgroundColor3 = BgDark optBtn.Text = tostring(opt) optBtn.TextColor3 = TextColor optBtn.TextSize = 12 optBtn.Font = Enum.Font.Gotham Instance.new("UICorner", optBtn).CornerRadius = UDim.new(0, 4)
         optBtn.MouseEnter:Connect(function() TweenService:Create(optBtn, TweenInfo.new(0.15), {BackgroundColor3 = Color3.fromRGB(60, 30, 90)}):Play() end)
@@ -504,6 +905,10 @@ end
 -- SETTINGS OVERLAY
 -- ==============================================
 CreateLabel(SettingsOverlay, "UI customization")
+UI_Elements.keybindMenu = CreateKeybind(SettingsOverlay, "Menu Keybind", Settings.MenuKeybind, function(keyName)
+    Settings.MenuKeybind = keyName
+end)
+CreateLabel(SettingsOverlay, "Click the bind, press a key. Backspace = None, Esc = cancel")
 UI_Elements.dropdownDeviceMode = CreateDropdown(SettingsOverlay, "Device Mode", {"PC", "Phone"}, Settings.DeviceMode, function(val)
     Settings.DeviceMode = val
     local scale = (val == "Phone") and 0.85 or 1.0
@@ -574,7 +979,7 @@ UI_Elements.sliderGateG = CreateSlider(gateDropdown, "Color: Green (G)", 0, 255,
 UI_Elements.sliderGateB = CreateSlider(gateDropdown, "Color: Blue (B)", 0, 255, 255, function(val) Settings.GateB = val end)
 
 -- VISUAL PAGE
--- LOW GRAPHICS SECTION (ГАРМОШКА)
+-- LOW GRAPHICS SECTION
 local lowGraphicsDropdown = CreateDropdownSection(VisualPage, "Low Graphics")
 UI_Elements.toggleLowGraphics = CreateToggle(lowGraphicsDropdown, "Enable Low Graphics", false, function(state)
     Settings.LowGraphics = state
@@ -582,9 +987,10 @@ UI_Elements.toggleLowGraphics = CreateToggle(lowGraphicsDropdown, "Enable Low Gr
 end)
 UI_Elements.dropdownTextureQuality = CreateDropdown(lowGraphicsDropdown, "Texture Quality", {"Performance", "Balanced", "Quality"}, "Balanced", function(val)
     Settings.TextureQuality = val
-    if Settings.LowGraphics then RefreshLowGraphics() end
+    if Settings.LowGraphics then RefreshLowGraphics() else RestorePerformanceBlur() end
 end)
-CreateLabel(lowGraphicsDropdown, "Optimizes textures & render for weak PC")
+CreateLabel(lowGraphicsDropdown, "Performance = мыльные (soapy) textures + max FPS")
+CreateLabel(lowGraphicsDropdown, "Balanced / Quality keep normal textures")
 
 local flashDropdown = CreateDropdownSection(VisualPage, "Custom Flashlight")
 UI_Elements.toggleFlashlight = CreateToggle(flashDropdown, "Enable Flashlight", false, function(state) Settings.Flashlight = state end)
@@ -611,97 +1017,219 @@ UI_Elements.sliderFogG = CreateSlider(fogDropdown, "Color: Green (G)", 0, 255, 1
 UI_Elements.sliderFogB = CreateSlider(fogDropdown, "Color: Blue (B)", 0, 255, 150, function(val) Settings.FogB = val end)
 
 local skyboxDropdown = CreateDropdownSection(VisualPage, "Custom Skybox")
-local function GetTargetBrightness() return (Settings.SkyBright / 100) * 10 end
+local RemovedAtmospheres = {}
+local RemovedSkies = {}
+local CustomAtmosphere = nil
+local CustomSkyCC = nil
+local _applyingPreset = false
+local function GetTargetBrightness() return (Settings.SkyBright / 100) * 6 end
 local function GetTargetExposure() return (Settings.SkyExp / 100) * 2 - 1 end
 local function GetTargetSkyColor() return Color3.fromRGB(Settings.SkyR, Settings.SkyG, Settings.SkyB) end
 local function GetTargetHorizonColor() return Color3.fromRGB(Settings.HorR, Settings.HorG, Settings.HorB) end
-local function GetTargetAmbient() return Color3.fromRGB(math.floor(Settings.SkyR * 0.3), math.floor(Settings.SkyG * 0.3), math.floor(Settings.SkyB * 0.3)) end
-local function ApplySkybox()
-    if not Settings.SkyEnabled or _skyboxApplying then return end _skyboxApplying = true
-    pcall(function()
-        for _, obj in ipairs(Lighting:GetChildren()) do if obj:IsA("Sky") and obj.Name ~= "EssentialCustomSky" then obj:Destroy() end end
-        for _, obj in ipairs(Lighting:GetChildren()) do if obj:IsA("Atmosphere") then obj.Parent = nil end end
-        if not CustomSky or not CustomSky.Parent or CustomSky.Parent ~= Lighting then
-            if CustomSky then pcall(function() CustomSky:Destroy() end) end CustomSky = Instance.new("Sky") CustomSky.Name = "EssentialCustomSky" CustomSky.Parent = Lighting
+local function GetTargetAmbient()
+    return Color3.fromRGB(
+        math.clamp(math.floor(Settings.SkyR * 0.45 + Settings.HorR * 0.2), 0, 255),
+        math.clamp(math.floor(Settings.SkyG * 0.45 + Settings.HorG * 0.2), 0, 255),
+        math.clamp(math.floor(Settings.SkyB * 0.45 + Settings.HorB * 0.2), 0, 255)
+    )
+end
+local function StoreAtmosphere(atmo)
+    for _, a in ipairs(RemovedAtmospheres) do if a == atmo then return end end
+    table.insert(RemovedAtmospheres, atmo)
+end
+local function StoreSky(sk)
+    for _, a in ipairs(RemovedSkies) do if a == sk then return end end
+    table.insert(RemovedSkies, sk)
+end
+local function EnsureCustomSky()
+    local foundCustom = nil
+    local foundAtmo = nil
+    local foundCC = nil
+    for _, obj in ipairs(Lighting:GetChildren()) do
+        if obj:IsA("Sky") then
+            if obj.Name == "EssentialCustomSky" then foundCustom = obj
+            else StoreSky(obj) pcall(function() obj.Parent = nil end) end
+        elseif obj:IsA("Atmosphere") then
+            if obj.Name == "EssentialCustomAtmosphere" then foundAtmo = obj
+            else StoreAtmosphere(obj) pcall(function() obj.Parent = nil end) end
+        elseif obj:IsA("ColorCorrectionEffect") and obj.Name == "EssentialSkyCC" then
+            foundCC = obj
         end
-        CustomSky.StarCount = SkySettings.StarCount CustomSky.SunAngularSize = SkySettings.SunAngularSize CustomSky.MoonAngularSize = SkySettings.MoonAngularSize CustomSky.CelestialBodiesShown = SkySettings.CelestialBodiesShown
-        Lighting.Brightness = GetTargetBrightness() Lighting.ExposureCompensation = GetTargetExposure() Lighting.ColorShift_Top = GetTargetSkyColor() Lighting.ColorShift_Bottom = GetTargetHorizonColor() Lighting.OutdoorAmbient = GetTargetHorizonColor() Lighting.Ambient = GetTargetAmbient()
-        if not Settings.CustomFog then Lighting.FogColor = GetTargetHorizonColor() end
+    end
+    if not foundCustom or foundCustom.Parent ~= Lighting then
+        local ns = CustomSky or Instance.new("Sky")
+        ns.Name = "EssentialCustomSky"
+        pcall(function() ns.Parent = Lighting end)
+        CustomSky = ns foundCustom = ns
+    else CustomSky = foundCustom end
+    if not foundAtmo or foundAtmo.Parent ~= Lighting then
+        local na = CustomAtmosphere or Instance.new("Atmosphere")
+        na.Name = "EssentialCustomAtmosphere"
+        pcall(function() na.Parent = Lighting end)
+        CustomAtmosphere = na foundAtmo = na
+    else CustomAtmosphere = foundAtmo end
+    if not foundCC or foundCC.Parent ~= Lighting then
+        local ncc = CustomSkyCC or Instance.new("ColorCorrectionEffect")
+        ncc.Name = "EssentialSkyCC"
+        pcall(function() ncc.Parent = Lighting end)
+        CustomSkyCC = ncc foundCC = ncc
+    else CustomSkyCC = foundCC end
+    return foundCustom, foundAtmo, foundCC
+end
+
+local SOLID_SKY_TEXTURE = "rbxassetid://159981303"
+
+local function EnforceSkybox()
+    if not Settings.SkyEnabled then return end
+    local sky, atmo, cc = EnsureCustomSky()
+    local skyCol = GetTargetSkyColor()
+    local horCol = GetTargetHorizonColor()
+    pcall(function()
+        if sky then
+            -- Pin skybox cube faces so the sky dome stays anchored 360° regardless of camera pitch/rotation
+            if sky.SkyboxBk ~= SOLID_SKY_TEXTURE then
+                sky.SkyboxBk = SOLID_SKY_TEXTURE
+                sky.SkyboxDn = SOLID_SKY_TEXTURE
+                sky.SkyboxFt = SOLID_SKY_TEXTURE
+                sky.SkyboxLf = SOLID_SKY_TEXTURE
+                sky.SkyboxRt = SOLID_SKY_TEXTURE
+                sky.SkyboxUp = SOLID_SKY_TEXTURE
+            end
+            sky.StarCount = SkySettings.StarCount
+            sky.SunAngularSize = SkySettings.SunAngularSize
+            sky.MoonAngularSize = SkySettings.MoonAngularSize
+            sky.CelestialBodiesShown = SkySettings.CelestialBodiesShown
+        end
+        if atmo then
+            -- Zero out fog density & haze so the skybox dome is never occluded or washed out on camera turn
+            atmo.Density = 0.05
+            atmo.Offset = 0
+            atmo.Color = skyCol
+            atmo.Decay = horCol
+            atmo.Glare = 0
+            atmo.Haze = 0
+        end
+        if cc then
+            cc.Enabled = true
+            cc.TintColor = skyCol:Lerp(Color3.fromRGB(255, 255, 255), 0.6)
+            cc.Brightness = (Settings.SkyBright - 50) / 250
+            cc.Contrast = 0.05
+            cc.Saturation = 0.1
+        end
+        Lighting.Brightness = GetTargetBrightness()
+        Lighting.ExposureCompensation = GetTargetExposure()
+        Lighting.ColorShift_Top = skyCol
+        Lighting.ColorShift_Bottom = horCol
+        Lighting.OutdoorAmbient = horCol
+        Lighting.Ambient = GetTargetAmbient()
+        Lighting.ClockTime = Settings.SkyClock
+        if not Settings.CustomFog then
+            Lighting.FogColor = horCol
+            Lighting.FogStart = 50000
+            Lighting.FogEnd = 100000
+        end
     end)
-    _skyboxApplying = false
+end
+local function ApplySkybox()
+    if not Settings.SkyEnabled then return end
+    EnforceSkybox()
 end
 local function ResetSkybox()
-    _skyboxApplying = true
     pcall(function()
         if CustomSky then pcall(function() CustomSky:Destroy() end) CustomSky = nil end
-        for _, obj in ipairs(Lighting:GetChildren()) do if obj:IsA("Sky") and obj.Name == "EssentialCustomSky" then obj:Destroy() end end
+        if CustomAtmosphere then pcall(function() CustomAtmosphere:Destroy() end) CustomAtmosphere = nil end
+        if CustomSkyCC then pcall(function() CustomSkyCC:Destroy() end) CustomSkyCC = nil end
+        for _, obj in ipairs(Lighting:GetChildren()) do
+            if (obj:IsA("Sky") and obj.Name == "EssentialCustomSky")
+                or (obj:IsA("Atmosphere") and obj.Name == "EssentialCustomAtmosphere")
+                or (obj:IsA("ColorCorrectionEffect") and obj.Name == "EssentialSkyCC") then
+                pcall(function() obj:Destroy() end)
+            end
+        end
+        for _, sk in ipairs(RemovedSkies) do pcall(function() if sk and sk.Parent == nil then sk.Parent = Lighting end end) end
+        for _, atmo in ipairs(RemovedAtmospheres) do pcall(function() if atmo and atmo.Parent == nil then atmo.Parent = Lighting end end) end
         if DefaultAtmosphere and DefaultAtmosphere.Parent == nil then pcall(function() DefaultAtmosphere.Parent = Lighting end) end
         Lighting.Brightness = DefaultLighting.Brightness Lighting.ExposureCompensation = DefaultLighting.ExposureCompensation Lighting.Ambient = DefaultLighting.Ambient Lighting.OutdoorAmbient = DefaultLighting.OutdoorAmbient Lighting.ColorShift_Top = DefaultLighting.ColorShift_Top Lighting.ColorShift_Bottom = DefaultLighting.ColorShift_Bottom Lighting.ClockTime = DefaultLighting.ClockTime
         if not Settings.CustomFog then Lighting.FogColor = DefaultLighting.FogColor end
     end)
-    _skyboxApplying = false
 end
-local _applyingPreset = false
-local function ApplyPreset(preset)
+local PresetDefinitions = {
+    Day = { skyR = 120, skyG = 180, skyB = 255, horR = 220, horG = 235, horB = 255, bright = 60, exp = 50, clock = 14, starCount = 300, sunSize = 18, moonSize = 11, celestial = true },
+    Sunset = { skyR = 255, skyG = 110, skyB = 55, horR = 255, horG = 185, horB = 105, bright = 45, exp = 60, clock = 17.6, starCount = 700, sunSize = 22, moonSize = 11, celestial = true },
+    Night = { skyR = 18, skyG = 28, skyB = 75, horR = 40, horG = 55, horB = 105, bright = 20, exp = 35, clock = 0, starCount = 3500, sunSize = 0, moonSize = 14, celestial = true },
+    Space = { skyR = 12, skyG = 8, skyB = 45, horR = 65, horG = 25, horB = 110, bright = 15, exp = 30, clock = 0, starCount = 5000, sunSize = 0, moonSize = 0, celestial = false },
+    Purple = { skyR = 135, skyG = 45, skyB = 220, horR = 205, horG = 95, horB = 250, bright = 50, exp = 55, clock = 19, starCount = 2200, sunSize = 10, moonSize = 15, celestial = true },
+}
+local function SyncSkySlidersSilent()
+    if UI_Elements.skyBrightnessSlider then UI_Elements.skyBrightnessSlider(Settings.SkyBright, true) end
+    if UI_Elements.skyExposureSlider then UI_Elements.skyExposureSlider(Settings.SkyExp, true) end
+    if UI_Elements.skyRSlider then UI_Elements.skyRSlider(Settings.SkyR, true) end
+    if UI_Elements.skyGSlider then UI_Elements.skyGSlider(Settings.SkyG, true) end
+    if UI_Elements.skyBSlider then UI_Elements.skyBSlider(Settings.SkyB, true) end
+    if UI_Elements.horRSlider then UI_Elements.horRSlider(Settings.HorR, true) end
+    if UI_Elements.horGSlider then UI_Elements.horGSlider(Settings.HorG, true) end
+    if UI_Elements.horBSlider then UI_Elements.horBSlider(Settings.HorB, true) end
+    if UI_Elements.skyClockSlider then UI_Elements.skyClockSlider(Settings.SkyClock, true) end
+end
+local function ApplyPreset(preset, fromToggleOrLoad)
     Settings.SkyPreset = preset
-    if preset == "Default" then ResetSkybox() return end
-    if preset == "Custom" then ApplySkybox() return end
-    local presets = {
-        Day = { skyR = 120, skyG = 180, skyB = 255, horR = 220, horG = 235, horB = 255, bright = 60, exp = 50, clock = 14, starCount = 300, sunSize = 18, moonSize = 11, celestial = true },
-        Sunset = { skyR = 255, skyG = 140, skyB = 60, horR = 255, horG = 200, horB = 120, bright = 40, exp = 65, clock = 17.5, starCount = 700, sunSize = 22, moonSize = 11, celestial = true },
-        Night = { skyR = 15, skyG = 20, skyB = 60, horR = 40, horG = 50, horB = 90, bright = 15, exp = 25, clock = 0, starCount = 3000, sunSize = 0, moonSize = 13, celestial = true },
-        Space = { skyR = 12, skyG = 8, skyB = 40, horR = 55, horG = 25, horB = 95, bright = 5, exp = 12, clock = 0, starCount = 5000, sunSize = 0, moonSize = 0, celestial = false },
-        Purple = { skyR = 90, skyG = 30, skyB = 160, horR = 170, horG = 70, horB = 210, bright = 45, exp = 55, clock = 19, starCount = 1800, sunSize = 8, moonSize = 14, celestial = true },
-    }
-    local p = presets[preset]
-    if p then
+    if UI_Elements.presetDropdown then UI_Elements.presetDropdown(preset, true) end
+    if preset == "Default" then
+        if not fromToggleOrLoad and Settings.SkyEnabled then
+            Settings.SkyEnabled = false
+            if UI_Elements.toggleSky then UI_Elements.toggleSky(false, true) end
+            ResetSkybox()
+        elseif Settings.SkyEnabled then
+            EnforceSkybox()
+        else
+            ResetSkybox()
+        end
+        return
+    end
+    local pr = PresetDefinitions[preset]
+    if pr then
         _applyingPreset = true
-        Settings.SkyR = p.skyR Settings.SkyG = p.skyG Settings.SkyB = p.skyB Settings.HorR = p.horR Settings.HorG = p.horG Settings.HorB = p.horB Settings.SkyBright = p.bright Settings.SkyExp = p.exp if p.clock then Lighting.ClockTime = p.clock end
-        SkySettings.StarCount = p.starCount or 1000 SkySettings.SunAngularSize = p.sunSize or 11 SkySettings.MoonAngularSize = p.moonSize or 11 SkySettings.CelestialBodiesShown = p.celestial ~= false 
-        if UI_Elements.skyBrightnessSlider then UI_Elements.skyBrightnessSlider(Settings.SkyBright) end
-        if UI_Elements.skyExposureSlider then UI_Elements.skyExposureSlider(Settings.SkyExp) end
-        if UI_Elements.skyRSlider then UI_Elements.skyRSlider(Settings.SkyR) end
-        if UI_Elements.skyGSlider then UI_Elements.skyGSlider(Settings.SkyG) end
-        if UI_Elements.skyBSlider then UI_Elements.skyBSlider(Settings.SkyB) end
-        if UI_Elements.horRSlider then UI_Elements.horRSlider(Settings.HorR) end
-        if UI_Elements.horGSlider then UI_Elements.horGSlider(Settings.HorG) end
-        if UI_Elements.horBSlider then UI_Elements.horBSlider(Settings.HorB) end
+        Settings.SkyR = pr.skyR Settings.SkyG = pr.skyG Settings.SkyB = pr.skyB
+        Settings.HorR = pr.horR Settings.HorG = pr.horG Settings.HorB = pr.horB
+        Settings.SkyBright = pr.bright Settings.SkyExp = pr.exp Settings.SkyClock = pr.clock
+        SkySettings.StarCount = pr.starCount or 1000 SkySettings.SunAngularSize = pr.sunSize or 11 SkySettings.MoonAngularSize = pr.moonSize or 11 SkySettings.CelestialBodiesShown = pr.celestial ~= false
+        SyncSkySlidersSilent()
         _applyingPreset = false
     end
-    ApplySkybox()
+    if not fromToggleOrLoad and not Settings.SkyEnabled then
+        Settings.SkyEnabled = true
+        if UI_Elements.toggleSky then UI_Elements.toggleSky(true, true) end
+    end
+    if Settings.SkyEnabled then EnforceSkybox() end
 end
 local function HandleSkySliderChange()
-    if not _applyingPreset and Settings.SkyPreset ~= "Custom" then _applyingPreset = true if UI_Elements.presetDropdown then UI_Elements.presetDropdown("Custom") end _applyingPreset = false end
+    if not _applyingPreset and Settings.SkyPreset ~= "Custom" then
+        Settings.SkyPreset = "Custom"
+        if UI_Elements.presetDropdown then UI_Elements.presetDropdown("Custom", true) end
+    end
 end
-local function GuardLightingProp(prop, valueFn)
-    local conn = Lighting:GetPropertyChangedSignal(prop):Connect(function()
-        if prop == "FogColor" and Settings.CustomFog then return end
-        if (prop == "FogStart" or prop == "FogEnd") and Settings.CustomFog then return end
-        if Settings.SkyEnabled and not _skyboxApplying then _skyboxApplying = true pcall(function() Lighting[prop] = valueFn() end) _skyboxApplying = false end
-    end)
-    table.insert(skyboxGuardConnections, conn)
-end
-local function ConnectSkyboxGuards()
-    for _, conn in ipairs(skyboxGuardConnections) do if conn then pcall(function() conn:Disconnect() end) end end skyboxGuardConnections = {}
-    GuardLightingProp("Brightness", GetTargetBrightness) GuardLightingProp("ExposureCompensation", GetTargetExposure) GuardLightingProp("ColorShift_Top", GetTargetSkyColor) GuardLightingProp("ColorShift_Bottom", GetTargetHorizonColor) GuardLightingProp("OutdoorAmbient", GetTargetHorizonColor) GuardLightingProp("FogColor", GetTargetHorizonColor) GuardLightingProp("Ambient", GetTargetAmbient)
-    local childAddedConn = Lighting.ChildAdded:Connect(function(child)
-        if not Settings.SkyEnabled or _skyboxApplying then return end
-        if child:IsA("Sky") and child.Name ~= "EssentialCustomSky" then task.defer(function() if child and child.Parent then child:Destroy() end end) end
-        if child:IsA("Atmosphere") then task.defer(function() if child and child.Parent then child.Parent = nil end end) end
-    end)
-    table.insert(skyboxGuardConnections, childAddedConn)
-end
-local function DisconnectSkyboxGuards() for _, conn in ipairs(skyboxGuardConnections) do if conn then pcall(function() conn:Disconnect() end) end end skyboxGuardConnections = {} end
-UI_Elements.toggleSky = CreateToggle(skyboxDropdown, "Enable Skybox", false, function(state) Settings.SkyEnabled = state if state then ConnectSkyboxGuards() ApplyPreset(Settings.SkyPreset) else DisconnectSkyboxGuards() ResetSkybox() end end)
-UI_Elements.skyBrightnessSlider = CreateSlider(skyboxDropdown, "Brightness", 0, 100, 50, function(v) Settings.SkyBright = v ApplySkybox() HandleSkySliderChange() end)
-UI_Elements.skyExposureSlider = CreateSlider(skyboxDropdown, "Exposure", 0, 100, 50, function(v) Settings.SkyExp = v ApplySkybox() HandleSkySliderChange() end)
-UI_Elements.skyRSlider = CreateSlider(skyboxDropdown, "Sky Color Red (R)", 0, 255, 100, function(v) Settings.SkyR = v ApplySkybox() HandleSkySliderChange() end)
-UI_Elements.skyGSlider = CreateSlider(skyboxDropdown, "Sky Color Green (G)", 0, 255, 160, function(v) Settings.SkyG = v ApplySkybox() HandleSkySliderChange() end)
-UI_Elements.skyBSlider = CreateSlider(skyboxDropdown, "Sky Color Blue (B)", 0, 255, 255, function(v) Settings.SkyB = v ApplySkybox() HandleSkySliderChange() end)
-UI_Elements.horRSlider = CreateSlider(skyboxDropdown, "Horizon Color Red (R)", 0, 255, 200, function(v) Settings.HorR = v ApplySkybox() HandleSkySliderChange() end)
-UI_Elements.horGSlider = CreateSlider(skyboxDropdown, "Horizon Color Green (G)", 0, 255, 220, function(v) Settings.HorG = v ApplySkybox() HandleSkySliderChange() end)
-UI_Elements.horBSlider = CreateSlider(skyboxDropdown, "Horizon Color Blue (B)", 0, 255, 255, function(v) Settings.HorB = v ApplySkybox() HandleSkySliderChange() end)
-UI_Elements.presetDropdown = CreateDropdown(skyboxDropdown, "Skybox Preset", {"Default", "Day", "Sunset", "Night", "Space", "Purple", "Custom"}, "Default", function(selected) ApplyPreset(selected) end)
+UI_Elements.toggleSky = CreateToggle(skyboxDropdown, "Enable Skybox", false, function(state)
+    Settings.SkyEnabled = state
+    if state then
+        if Settings.SkyPreset ~= "Default" and PresetDefinitions[Settings.SkyPreset] then
+            ApplyPreset(Settings.SkyPreset, true)
+        end
+        EnforceSkybox()
+    else
+        ResetSkybox()
+    end
+end)
+UI_Elements.skyBrightnessSlider = CreateSlider(skyboxDropdown, "Brightness", 0, 100, 50, function(v) Settings.SkyBright = v HandleSkySliderChange() ApplySkybox() end)
+UI_Elements.skyExposureSlider = CreateSlider(skyboxDropdown, "Exposure", 0, 100, 50, function(v) Settings.SkyExp = v HandleSkySliderChange() ApplySkybox() end)
+UI_Elements.skyRSlider = CreateSlider(skyboxDropdown, "Sky Color Red (R)", 0, 255, 100, function(v) Settings.SkyR = v HandleSkySliderChange() ApplySkybox() end)
+UI_Elements.skyGSlider = CreateSlider(skyboxDropdown, "Sky Color Green (G)", 0, 255, 160, function(v) Settings.SkyG = v HandleSkySliderChange() ApplySkybox() end)
+UI_Elements.skyBSlider = CreateSlider(skyboxDropdown, "Sky Color Blue (B)", 0, 255, 255, function(v) Settings.SkyB = v HandleSkySliderChange() ApplySkybox() end)
+UI_Elements.horRSlider = CreateSlider(skyboxDropdown, "Horizon Color Red (R)", 0, 255, 200, function(v) Settings.HorR = v HandleSkySliderChange() ApplySkybox() end)
+UI_Elements.horGSlider = CreateSlider(skyboxDropdown, "Horizon Color Green (G)", 0, 255, 220, function(v) Settings.HorG = v HandleSkySliderChange() ApplySkybox() end)
+UI_Elements.horBSlider = CreateSlider(skyboxDropdown, "Horizon Color Blue (B)", 0, 255, 255, function(v) Settings.HorB = v HandleSkySliderChange() ApplySkybox() end)
+UI_Elements.skyClockSlider = CreateSlider(skyboxDropdown, "Time (ClockTime)", 0, 24, 14, function(v) Settings.SkyClock = v HandleSkySliderChange() ApplySkybox() end)
+CreateLabel(skyboxDropdown, "Presets auto-enable skybox. Moving any slider switches to Custom")
+UI_Elements.presetDropdown = CreateDropdown(skyboxDropdown, "Skybox Preset", {"Default", "Day", "Sunset", "Night", "Space", "Purple", "Custom"}, "Default", function(selected) ApplyPreset(selected, false) end)
 
 local hudDropdown = CreateDropdownSection(VisualPage, "Essential HUD")
 local hudContainer, hudTitle, hudFPS, hudPing, hudKiller, hudUpdateConnection = nil, nil, nil, nil, nil, nil
@@ -714,7 +1242,7 @@ local function BuildEssentialHUD()
     local listLayout = Instance.new("UIListLayout", hudContainer) listLayout.SortOrder = Enum.SortOrder.LayoutOrder listLayout.Padding = UDim.new(0, 4)
     hudTitle = Instance.new("TextLabel", hudContainer) hudTitle.LayoutOrder = 1 hudTitle.Size = UDim2.new(0, 130, 0, 18) hudTitle.BackgroundTransparency = 1 hudTitle.Text = "Essential" hudTitle.TextColor3 = Color3.fromRGB(200, 150, 255) hudTitle.TextSize = 13 hudTitle.Font = Enum.Font.GothamBold hudTitle.TextXAlignment = Enum.TextXAlignment.Left hudTitle.AutomaticSize = Enum.AutomaticSize.X
     table.insert(ThemeElements.Texts, hudTitle)
-    hudFPS = Instance.new("TextLabel", hudContainer) hudFPS.LayoutOrder = 2 hudFPS.Size = UDim2.new(0, 130, 0, 18) hudFPS.BackgroundTransparency = 1 hudFPS.Text = "FPS: --" hudFPS.TextColor3 = TextColor hudFPS.TextSize = 12 hudFPS.Font = Enum.Font.GothamBold hudFPS.TextXAlignment = Enum.TextXAlignment.Left hudFPS.AutomaticSize = Enum.AutomaticSize.X 
+    hudFPS = Instance.new("TextLabel", hudContainer) hudFPS.LayoutOrder = 2 hudFPS.Size = UDim2.new(0, 130, 0, 18) hudFPS.BackgroundTransparency = 1 hudFPS.Text = "FPS: --" hudFPS.TextColor3 = TextColor hudFPS.TextSize = 12 hudFPS.Font = Enum.Font.GothamBold hudFPS.TextXAlignment = Enum.TextXAlignment.Left hudFPS.AutomaticSize = Enum.AutomaticSize.X
     hudPing = Instance.new("TextLabel", hudContainer) hudPing.LayoutOrder = 3 hudPing.Size = UDim2.new(0, 130, 0, 18) hudPing.BackgroundTransparency = 1 hudPing.Text = "Ping: -- ms" hudPing.TextColor3 = TextColor hudPing.TextSize = 12 hudPing.Font = Enum.Font.GothamBold hudPing.TextXAlignment = Enum.TextXAlignment.Left hudPing.AutomaticSize = Enum.AutomaticSize.X
     hudKiller = Instance.new("TextLabel", hudContainer) hudKiller.LayoutOrder = 4 hudKiller.Size = UDim2.new(0, 130, 0, 18) hudKiller.BackgroundTransparency = 1 hudKiller.Text = "Killer: Unknown" hudKiller.TextColor3 = TextColor hudKiller.TextSize = 12 hudKiller.Font = Enum.Font.GothamBold hudKiller.TextXAlignment = Enum.TextXAlignment.Left hudKiller.AutomaticSize = Enum.AutomaticSize.X
     hudContainer.Parent = ScreenGui
@@ -776,8 +1304,17 @@ UI_Elements.sliderCHG = CreateSlider(crosshairDropdown, "Color: Green (G)", 0, 2
 UI_Elements.sliderCHB = CreateSlider(crosshairDropdown, "Color: Blue (B)", 0, 255, 0, function(val) Settings.CHB = val end)
 
 local fovDropdown = CreateDropdownSection(MiscPage, "FOV Changer")
-UI_Elements.toggleFOVSet = CreateToggle(fovDropdown, "Enable FOV Changer", false, function(state) Settings.FOVEnabled = state end)
-UI_Elements.sliderSet = CreateSlider(fovDropdown, "FOV Changer Value", 70, 120, 70, function(val) Settings.FOV = val end)
+UI_Elements.toggleFOVSet = CreateToggle(fovDropdown, "Enable FOV Changer", false, function(state)
+    Settings.FOVEnabled = state
+    local cam = workspace.CurrentCamera
+    if cam then
+        _fovApplying = true
+        cam.FieldOfView = state and Settings.FOV or DefaultFOV
+        _fovApplying = false
+    end
+end)
+UI_Elements.sliderSet = CreateSlider(fovDropdown, "FOV Changer Value", 40, 140, 70, function(val) Settings.FOV = val pcall(ForceFOV) end)
+CreateLabel(fovDropdown, "Triple-locked: item zoom is overwritten same frame")
 
 local speedhackDropdown = CreateDropdownSection(MiscPage, "Speedhack")
 UI_Elements.toggleSpeedSet = CreateToggle(speedhackDropdown, "Enable Speedhack", false, function(state) Settings.Speedhack = state end)
@@ -787,6 +1324,309 @@ UI_Elements.sliderSpeedSet = CreateSlider(speedhackDropdown, "Speed Value", 16, 
 local jumphackDropdown = CreateDropdownSection(MiscPage, "Jumphack")
 UI_Elements.toggleJumphack = CreateToggle(jumphackDropdown, "Enable Jumphack", false, function(state) Settings.Jumphack = state end)
 UI_Elements.sliderJumpPower = CreateSlider(jumphackDropdown, "Jump Power", 30, 150, 50, function(val) Settings.JumpPower = val end)
+
+-- ==============================================
+-- AUTO MOONWALK v3 (Works in-match: steers AlignOrientation & BodyGyro + WASD fallback)
+-- ==============================================
+local moonwalkBound = false
+local moonwalkSavedAutoRotate = nil
+local moonwalkHeartbeatConn = nil
+local moonwalkSteppedConn = nil
+local moonwalkPreRenderConn = nil
+local DisabledOrientConstraints = {}
+
+local function GetMoonwalkParts()
+    local char = LocalPlayer.Character
+    if not char then return nil, nil, nil end
+    local hum = char:FindFirstChildWhichIsA("Humanoid")
+    local hrp = char:FindFirstChild("HumanoidRootPart") or char.PrimaryPart or char:FindFirstChildWhichIsA("BasePart")
+    return char, hum, hrp
+end
+
+local function RestoreMoonwalkConstraints()
+    for inst, saved in pairs(DisabledOrientConstraints) do
+        if inst and inst.Parent then
+            pcall(function()
+                if inst:IsA("AlignOrientation") then
+                    inst.Enabled = saved.Enabled
+                elseif inst:IsA("BodyGyro") then
+                    inst.MaxTorque = saved.MaxTorque
+                end
+            end)
+        end
+    end
+    DisabledOrientConstraints = {}
+end
+
+local function SuppressCharacterOrientConstraints(char, goalCF)
+    if not char then return end
+    for _, d in ipairs(char:GetDescendants()) do
+        if d:IsA("AlignOrientation") then
+            if DisabledOrientConstraints[d] == nil then
+                pcall(function() DisabledOrientConstraints[d] = { Enabled = d.Enabled } end)
+            end
+            pcall(function() d.CFrame = goalCF d.Enabled = false end)
+        elseif d:IsA("BodyGyro") then
+            if DisabledOrientConstraints[d] == nil then
+                pcall(function() DisabledOrientConstraints[d] = { MaxTorque = d.MaxTorque } end)
+            end
+            pcall(function() d.CFrame = goalCF d.MaxTorque = Vector3.new(0, 0, 0) end)
+        end
+    end
+end
+
+local function RestoreAutoRotate()
+    local _, hum = GetMoonwalkParts()
+    if hum then
+        pcall(function() hum.AutoRotate = (moonwalkSavedAutoRotate == nil) and true or moonwalkSavedAutoRotate end)
+    end
+    moonwalkSavedAutoRotate = nil
+    RestoreMoonwalkConstraints()
+end
+
+local function ComputeDesiredMoveFlat(hum, hrp)
+    local moveDir = Vector3.new(0, 0, 0)
+    pcall(function() moveDir = hum.MoveDirection end)
+    local flat = Vector3.new(moveDir.X, 0, moveDir.Z)
+    if flat.Magnitude > 0.05 then
+        return flat.Unit, true
+    end
+    -- Fallback for games with custom movement where Humanoid.MoveDirection stays 0
+    if not UserInputService:GetFocusedTextBox() and workspace.CurrentCamera then
+        local camCF = workspace.CurrentCamera.CFrame
+        local look = Vector3.new(camCF.LookVector.X, 0, camCF.LookVector.Z)
+        local right = Vector3.new(camCF.RightVector.X, 0, camCF.RightVector.Z)
+        if look.Magnitude > 0.01 then look = look.Unit end
+        if right.Magnitude > 0.01 then right = right.Unit end
+        local dir = Vector3.new(0, 0, 0)
+        if UserInputService:IsKeyDown(Enum.KeyCode.W) or UserInputService:IsKeyDown(Enum.KeyCode.Up) then dir = dir + look end
+        if UserInputService:IsKeyDown(Enum.KeyCode.S) or UserInputService:IsKeyDown(Enum.KeyCode.Down) then dir = dir - look end
+        if UserInputService:IsKeyDown(Enum.KeyCode.D) or UserInputService:IsKeyDown(Enum.KeyCode.Right) then dir = dir + right end
+        if UserInputService:IsKeyDown(Enum.KeyCode.A) or UserInputService:IsKeyDown(Enum.KeyCode.Left) then dir = dir - right end
+        if dir.Magnitude > 0.05 then
+            return dir.Unit, true
+        end
+    end
+    -- Velocity fallback
+    local vel = Vector3.new(0, 0, 0)
+    pcall(function() vel = hrp.AssemblyLinearVelocity end)
+    local vFlat = Vector3.new(vel.X, 0, vel.Z)
+    if vFlat.Magnitude > 1.5 then
+        return vFlat.Unit, true
+    end
+    return nil, false
+end
+
+local function IsPlayerInLobbyOrSpectator()
+    local inLobby = false
+    pcall(function()
+        local team = LocalPlayer.Team
+        if team then
+            local tn = string.lower(team.Name)
+            if string.find(tn, "lobby") or string.find(tn, "menu") or string.find(tn, "spectat") or string.find(tn, "wait") then
+                inLobby = true
+            end
+        end
+        if LocalPlayer:GetAttribute("InLobby") == true or LocalPlayer:GetAttribute("Spectating") == true or LocalPlayer:GetAttribute("IsSpectator") == true then
+            inLobby = true
+        end
+    end)
+    return inLobby
+end
+
+local function IsPlayerVaultingOrInteracting(char, hum)
+    -- Check common DBD/survival vault, window, pallet, locker, unhook attributes and animations
+    local blocked = false
+    pcall(function()
+        if char:GetAttribute("Vaulting") == true or char:GetAttribute("IsVaulting") == true
+            or char:GetAttribute("Interacting") == true or char:GetAttribute("Action") ~= nil
+            or char:GetAttribute("Stunned") == true or char:GetAttribute("Carried") == true
+            or char:GetAttribute("Hooked") == true or char:GetAttribute("Downed") == true
+            or char:GetAttribute("Crawling") == true then
+            blocked = true
+            return
+        end
+        if hum:GetAttribute("Vaulting") == true or hum:GetAttribute("Interacting") == true then
+            blocked = true
+            return
+        end
+        -- Check active animation tracks for vault / window / pallet / climb / interact
+        local animator = hum:FindFirstChildOfClass("Animator")
+        if animator then
+            for _, track in ipairs(animator:GetPlayingAnimationTracks()) do
+                local anim = track.Animation
+                local aname = string.lower((anim and anim.Name or "") .. " " .. (track.Name or ""))
+                if string.find(aname, "vault") or string.find(aname, "pallet") or string.find(aname, "window")
+                    or string.find(aname, "climb") or string.find(aname, "jumpover") or string.find(aname, "hop")
+                    or string.find(aname, "interact") or string.find(aname, "repair") or string.find(aname, "heal")
+                    or string.find(aname, "pickup") or string.find(aname, "drop") or string.find(aname, "hook") then
+                    blocked = true
+                    return
+                end
+            end
+        end
+    end)
+    return blocked
+end
+
+local function MoonwalkStep()
+    if not Settings.Moonwalk then return end
+
+    -- 1. Must NOT work in lobby or as spectator
+    if IsPlayerInLobbyOrSpectator() then
+        RestoreAutoRotate()
+        return
+    end
+
+    local char, hum, hrp = GetMoonwalkParts()
+    if not char or not hum or not hrp or not hrp.Parent then return end
+
+    -- 2. Must NOT work when dead
+    local alive = true
+    pcall(function() alive = hum.Health > 0 and hum:GetState() ~= Enum.HumanoidStateType.Dead end)
+    if not alive then
+        RestoreAutoRotate()
+        return
+    end
+
+    local anchored = false
+    pcall(function() anchored = hrp.Anchored end)
+    if anchored then
+        RestoreAutoRotate()
+        return
+    end
+
+    -- 3. Must NOT work when seated
+    local seated = false
+    pcall(function()
+        local st = hum:GetState()
+        seated = (st == Enum.HumanoidStateType.Seated) or (hum.SeatPart ~= nil)
+    end)
+    if seated then
+        RestoreAutoRotate()
+        return
+    end
+
+    -- 4. Must NOT cancel vaults, pallet jumps, window hops, or interactions
+    local humState = Enum.HumanoidStateType.Running
+    pcall(function() humState = hum:GetState() end)
+    if humState == Enum.HumanoidStateType.Jumping
+        or humState == Enum.HumanoidStateType.Freefall
+        or humState == Enum.HumanoidStateType.Climbing
+        or humState == Enum.HumanoidStateType.Swimming
+        or humState == Enum.HumanoidStateType.PlatformStanding
+        or humState == Enum.HumanoidStateType.Ragdoll then
+        -- During jump / vault / climb keep character native orientation so game action succeeds
+        local saved = moonwalkSavedAutoRotate
+        pcall(function()
+            if hum.AutoRotate ~= saved then hum.AutoRotate = saved end
+        end)
+        RestoreMoonwalkConstraints()
+        return
+    end
+
+    if IsPlayerVaultingOrInteracting(char, hum) then
+        local saved = moonwalkSavedAutoRotate
+        pcall(function()
+            if hum.AutoRotate ~= saved then hum.AutoRotate = saved end
+        end)
+        RestoreMoonwalkConstraints()
+        return
+    end
+
+    if moonwalkSavedAutoRotate == nil then
+        pcall(function() moonwalkSavedAutoRotate = hum.AutoRotate end)
+        if moonwalkSavedAutoRotate == nil then moonwalkSavedAutoRotate = true end
+    end
+
+    local moveFlat, isMoving = ComputeDesiredMoveFlat(hum, hrp)
+
+    if not isMoving and not Settings.MoonwalkAlways then
+        local saved = moonwalkSavedAutoRotate
+        pcall(function()
+            if hum.AutoRotate ~= saved then hum.AutoRotate = saved end
+        end)
+        RestoreMoonwalkConstraints()
+        return
+    end
+
+    pcall(function()
+        if hum.AutoRotate ~= false then hum.AutoRotate = false end
+    end)
+
+    local facing = nil
+    if isMoving and moveFlat then
+        facing = -moveFlat -- 180 deg backward to movement direction
+    elseif workspace.CurrentCamera then
+        local camLook = workspace.CurrentCamera.CFrame.LookVector
+        local cFlat = Vector3.new(camLook.X, 0, camLook.Z)
+        if cFlat.Magnitude > 0.01 then facing = -cFlat.Unit end
+    end
+    if not facing then return end
+
+    -- A/D balancing shake (simulates rapid A/D strafe balancing while moonwalking)
+    local t = os.clock() * math.max(1, Settings.MoonwalkSpeed)
+    local amp = math.rad(Settings.MoonwalkAngle)
+    local shake = math.sin(t) * amp + math.sin(t * 2.37) * amp * 0.35
+
+    -- ONLY rotate yaw: NEVER overwrite position (prevents cancelling pallet/window jump physics)
+    local currentCF = hrp.CFrame
+    local goalLook = nil
+    pcall(function()
+        goalLook = CFrame.lookAt(Vector3.new(0, 0, 0), facing) * CFrame.Angles(0, shake, 0)
+    end)
+    if goalLook then
+        local goalRotOnly = CFrame.new(currentCF.Position) * goalLook.Rotation
+        SuppressCharacterOrientConstraints(char, goalRotOnly)
+        pcall(function() hrp.CFrame = goalRotOnly end)
+    end
+end
+
+local function StartMoonwalk()
+    if moonwalkBound then return end
+    pcall(function()
+        RunService:BindToRenderStep("EssentialMoonwalk", 2147483641, function()
+            MoonwalkStep()
+            task.defer(MoonwalkStep)
+        end)
+    end)
+    if moonwalkHeartbeatConn then pcall(function() moonwalkHeartbeatConn:Disconnect() end) end
+    moonwalkHeartbeatConn = RunService.Heartbeat:Connect(MoonwalkStep)
+    if moonwalkSteppedConn then pcall(function() moonwalkSteppedConn:Disconnect() end) end
+    moonwalkSteppedConn = RunService.Stepped:Connect(MoonwalkStep)
+    pcall(function()
+        if RunService.PreRender then
+            if moonwalkPreRenderConn then pcall(function() moonwalkPreRenderConn:Disconnect() end) end
+            moonwalkPreRenderConn = RunService.PreRender:Connect(MoonwalkStep)
+        end
+    end)
+    moonwalkBound = true
+end
+
+local function StopMoonwalk()
+    pcall(function() RunService:UnbindFromRenderStep("EssentialMoonwalk") end)
+    if moonwalkHeartbeatConn then pcall(function() moonwalkHeartbeatConn:Disconnect() end) moonwalkHeartbeatConn = nil end
+    if moonwalkSteppedConn then pcall(function() moonwalkSteppedConn:Disconnect() end) moonwalkSteppedConn = nil end
+    if moonwalkPreRenderConn then pcall(function() moonwalkPreRenderConn:Disconnect() end) moonwalkPreRenderConn = nil end
+    moonwalkBound = false
+    RestoreAutoRotate()
+end
+
+local moonwalkDropdown = CreateDropdownSection(MiscPage, "Auto Moonwalk")
+UI_Elements.toggleMoonwalk = CreateToggle(moonwalkDropdown, "Enable Auto Moonwalk", false, function(state)
+    Settings.Moonwalk = state
+    if state then StartMoonwalk() else StopMoonwalk() end
+end)
+UI_Elements.sliderMoonAngle = CreateSlider(moonwalkDropdown, "Shake Angle (deg)", 0, 60, 18, function(val) Settings.MoonwalkAngle = val end)
+UI_Elements.sliderMoonSpeed = CreateSlider(moonwalkDropdown, "Shake Speed", 1, 60, 22, function(val) Settings.MoonwalkSpeed = val end)
+UI_Elements.toggleMoonAlways = CreateToggle(moonwalkDropdown, "Keep Backwards While Idle", false, function(state) Settings.MoonwalkAlways = state end)
+CreateLabel(moonwalkDropdown, "Hold W - walks backwards + A/D shake (works in match and lobby)")
+
+table.insert(connections, LocalPlayer.CharacterAdded:Connect(function()
+    moonwalkSavedAutoRotate = nil
+    task.wait(0.5)
+    if Settings.Moonwalk then StartMoonwalk() end
+end))
 
 local function RestoreNoclipCollisions()
     if LocalPlayer.Character then for partId, originalState in pairs(noclipOriginalCollide) do if partId and partId.Parent then partId.CanCollide = originalState end end end noclipOriginalCollide = {}
@@ -867,13 +1707,22 @@ CreateButton(ConfigPage, "Load Config", false, function()
                 if UI_Elements.sliderGateG then UI_Elements.sliderGateG(data.GateG or 255) end
                 if UI_Elements.sliderGateB then UI_Elements.sliderGateB(data.GateB or 255) end
                 if UI_Elements.toggleStaffTags then UI_Elements.toggleStaffTags(data.StaffTags or false) end
-                
+
                 -- Low Graphics Load
-                if UI_Elements.toggleLowGraphics then UI_Elements.toggleLowGraphics(data.LowGraphics or false) end
                 if UI_Elements.dropdownTextureQuality then UI_Elements.dropdownTextureQuality(data.TextureQuality or "Balanced") end
-                
-                if UI_Elements.toggleFOVSet then UI_Elements.toggleFOVSet(data.FOVEnabled or false) end
+                if UI_Elements.toggleLowGraphics then UI_Elements.toggleLowGraphics(data.LowGraphics or false) end
+
+                -- Moonwalk Load
+                if UI_Elements.sliderMoonAngle then UI_Elements.sliderMoonAngle(data.MoonwalkAngle or 18) end
+                if UI_Elements.sliderMoonSpeed then UI_Elements.sliderMoonSpeed(data.MoonwalkSpeed or 22) end
+                if UI_Elements.toggleMoonAlways then UI_Elements.toggleMoonAlways(data.MoonwalkAlways or false) end
+                if UI_Elements.toggleMoonwalk then UI_Elements.toggleMoonwalk(data.Moonwalk or false) end
+
+                -- Keybind Load
+                if UI_Elements.keybindMenu then UI_Elements.keybindMenu(data.MenuKeybind or "RightShift") end
+
                 if UI_Elements.sliderSet then UI_Elements.sliderSet(data.FOV or 70) end
+                if UI_Elements.toggleFOVSet then UI_Elements.toggleFOVSet(data.FOVEnabled or false) end
                 if UI_Elements.toggleSpeedSet then UI_Elements.toggleSpeedSet(data.Speedhack or false) end
                 if UI_Elements.dropdownSpeedMode then UI_Elements.dropdownSpeedMode(data.SpeedMode or "Legit") end
                 if UI_Elements.sliderSpeedSet then UI_Elements.sliderSpeedSet(data.SpeedValue or 22) end
@@ -910,6 +1759,7 @@ CreateButton(ConfigPage, "Load Config", false, function()
                 if UI_Elements.horRSlider then UI_Elements.horRSlider(data.HorR or 200) end
                 if UI_Elements.horGSlider then UI_Elements.horGSlider(data.HorG or 220) end
                 if UI_Elements.horBSlider then UI_Elements.horBSlider(data.HorB or 255) end
+                if UI_Elements.skyClockSlider then UI_Elements.skyClockSlider(data.SkyClock or 14) end
                 _applyingPreset = false
                 if UI_Elements.toggleSky then UI_Elements.toggleSky(data.SkyEnabled or false) end
                 if UI_Elements.toggleEnableHUD then UI_Elements.toggleEnableHUD(data.HUDEnabled or false) end
@@ -936,51 +1786,396 @@ RefreshConfigList()
 local sep = Instance.new("Frame", ConfigPage) sep.Size = UDim2.new(1, 0, 0, 1) sep.BorderSizePixel = 0
 table.insert(ThemeElements.DarkStrokes, sep)
 
--- OBJECT TRACKING
-local function CheckObject(obj)
-    if not obj or not obj.Parent then return end
-    local name = string.lower(obj.Name)
-    if string.match(name, "generator") or name == "gen" then
-        if not table.find(trackedGenerators, obj) then table.insert(trackedGenerators, obj) end
-    elseif string.match(name, "pallet") then
-        if obj:IsA("Model") or obj:IsA("BasePart") then if not table.find(trackedPallets, obj) then table.insert(trackedPallets, obj) end end
-    elseif string.match(name, "hook") or string.match(name, "sacrifice") or string.match(name, "hang") or string.match(name, "meat") or string.match(name, "scourge") then
-        if not table.find(trackedHooks, obj) then table.insert(trackedHooks, obj) end
-    elseif string.match(name, "gate") or string.match(name, "exit") or string.match(name, "switch") or string.match(name, "lever") then
-        if not table.find(trackedGates, obj) then table.insert(trackedGates, obj) end
+-- ==============================================
+-- OBJECT TRACKING & ESP ENGINE (ISOLATED MAIN-CHUNK REGISTERS)
+;(function()
+    local Cache = setmetatable({}, {__mode="k"})
+    local function Has(n, w) return string.find(n,w,1,true) ~= nil end
+    local function Any(n, words)
+        for _, w in ipairs(words) do if Has(n,w) then return true end end
+        return false
     end
-end
-task.spawn(function()
-    local allObjs = workspace:GetDescendants()
-    for i = 1, #allObjs do CheckObject(allObjs[i]) if i % 1000 == 0 then task.wait() end end
-end)
-table.insert(connections, workspace.DescendantAdded:Connect(CheckObject))
+    local function GetRootModel(obj, check)
+        local cur, found = obj, nil
+        while cur and cur ~= workspace and cur ~= game do
+            if cur:IsA("Model") and check(cur) then found = cur end
+            cur = cur.Parent
+        end
+        return found
+    end
+    local function IsGenName(m)
+        local n = string.lower(m.Name)
+        return n == "gen" or Has(n,"generator")
+    end
+    local function IsPalletName(m)
+        local n = string.lower(m.Name)
+        return Has(n,"pallet") and not Any(n,{"decor","prop","stack","fake"})
+    end
+    local function IsHookName(m)
+        local n = string.lower(m.Name)
+        return Any(n,{"hook","gallows"}) and not Any(n,{"decor","prop","coat","crane","tow","grapple","webhook","effect","sound"})
+    end
+    local function IsGateName(m)
+        local n = string.lower(m.Name)
+        return not Any(n,{"switch","lever","button","box","panel","sign","light","lamp","small"}) and Any(n,{"gate","exitgate","exitdoor"})
+    end
+    local function Height(part)
+        local cf, sz = part.CFrame, part.Size
+        return math.abs(cf.XVector.Y)*sz.X + math.abs(cf.YVector.Y)*sz.Y + math.abs(cf.ZVector.Y)*sz.Z
+    end
+    local function IsCharacter(obj)
+        return obj:IsA("Model") and Players:GetPlayerFromCharacter(obj) ~= nil
+    end
+    local function Target(obj)
+        if obj:IsA("BasePart") then return obj end
+        return obj.PrimaryPart or obj:FindFirstChildWhichIsA("BasePart",true)
+    end
+    local function ScanGenerator(gen)
+        local data = Cache[gen]
+        if not data then return end
+        for _, key in ipairs({"progVals","boolVals","strVals","prompts","lights","lampParts","textLabels"}) do table.clear(data[key]) end
+        for _, d in ipairs(gen:GetDescendants()) do
+            if not data.part and d:IsA("BasePart") then data.part = gen.PrimaryPart or d end
+            if d:IsA("NumberValue") or d:IsA("IntValue") then
+                table.insert(data.progVals,d)
+                if data.initNums[d] == nil then data.initNums[d] = d.Value end
+            elseif d:IsA("BoolValue") then
+                table.insert(data.boolVals,d)
+                if data.initBools[d] == nil then data.initBools[d] = d.Value end
+            elseif d:IsA("StringValue") then table.insert(data.strVals,d)
+            elseif d:IsA("ProximityPrompt") then
+                table.insert(data.prompts,d)
+                if d.Enabled then data.hadEnabledPrompt = true end
+            elseif d:IsA("PointLight") or d:IsA("SpotLight") or d:IsA("SurfaceLight") then
+                table.insert(data.lights,d)
+                if data.initLights[d] == nil then data.initLights[d] = {enabled=d.Enabled,brightness=d.Brightness,range=d.Range,color=d.Color} end
+            elseif d:IsA("BasePart") then
+                if Any(string.lower(d.Name),{"light","lamp","bulb","neon","indicator","flood","status","glow"}) then
+                    table.insert(data.lampParts,d)
+                    if data.initMats[d] == nil then data.initMats[d] = {mat=d.Material,col=d.Color,trans=d.Transparency} end
+                end
+            elseif d:IsA("TextLabel") then table.insert(data.textLabels,d) end
+        end
+    end
+    local function RegisterGenerator(gen)
+        if not gen or not gen.Parent or Cache[gen] or IsCharacter(gen) then return end
+        local part = Target(gen)
+        if not part then return end
+        Cache[gen] = {part=part,progVals={},boolVals={},strVals={},prompts={},lights={},lampParts={},textLabels={},initAttrs=gen:GetAttributes(),initNums=setmetatable({},{__mode="k"}),initBools=setmetatable({},{__mode="k"}),initLights=setmetatable({},{__mode="k"}),initMats=setmetatable({},{__mode="k"}),hadEnabledPrompt=false,hl=gen:FindFirstChild("EssentialESP")}
+        ScanGenerator(gen)
+        table.insert(trackedGenerators,gen)
+    end
+    local function RegisterPallet(pallet)
+        if not pallet or not pallet.Parent or Cache[pallet] or IsCharacter(pallet) then return end
+        local mainPart, maxDim = nil, 0
+        local hasInteractive = next(pallet:GetAttributes()) ~= nil
+        local boolVals, strVals, prompts = {}, {}, {}
+        local list = pallet:IsA("BasePart") and {pallet} or pallet:GetDescendants()
+        for _, d in ipairs(list) do
+            if d:IsA("BasePart") then
+                if Any(string.lower(d.Name),{"trigger","hitbox","interact","prompt","drop","hinge","pivot"}) then hasInteractive = true end
+                if d.Transparency < 0.9 then
+                    local dim = math.max(d.Size.X,d.Size.Y,d.Size.Z)
+                    if dim > maxDim then maxDim = dim mainPart = d end
+                else hasInteractive = true end
+            elseif d:IsA("BoolValue") then hasInteractive = true table.insert(boolVals,d)
+            elseif d:IsA("StringValue") then hasInteractive = true table.insert(strVals,d)
+            elseif d:IsA("ProximityPrompt") then hasInteractive = true table.insert(prompts,d)
+            elseif d:IsA("ClickDetector") or d:IsA("AnimationController") or d:IsA("Animator") or d:IsA("Motor6D") or d:IsA("Weld") or d:IsA("HingeConstraint") or d:IsA("Sound") or d:IsA("ValueBase") then hasInteractive = true end
+        end
+        mainPart = mainPart or Target(pallet)
+        if not mainPart then return end
+        local h = Height(mainPart)
+        if h < 3.0 or (not hasInteractive and h < 4.0) then return end
+        Cache[pallet] = {part=mainPart,initUp=mainPart.CFrame.UpVector,initLook=mainPart.CFrame.LookVector,initHeight=h,boolVals=boolVals,strVals=strVals,prompts=prompts,hl=pallet:FindFirstChild("EssentialESP")}
+        table.insert(trackedPallets,pallet)
+    end
+    local function RegisterHook(hookObj)
+        if not hookObj or not hookObj.Parent or Cache[hookObj] or IsCharacter(hookObj) then return end
+        local part = Target(hookObj)
+        if not part then return end
+        local minY, maxY = math.huge, -math.huge
+        local hasFeature = next(hookObj:GetAttributes()) ~= nil or Any(string.lower(hookObj.Parent.Name),{"hook","interact"})
+        local boolVals = {}
+        for _, d in ipairs(hookObj:GetDescendants()) do
+            if d:IsA("BasePart") then
+                minY = math.min(minY,d.Position.Y-d.Size.Y*0.5)
+                maxY = math.max(maxY,d.Position.Y+d.Size.Y*0.5)
+                if Any(string.lower(d.Name),{"hook","point","hang","victim","survivor","trigger","hitbox","prompt"}) then hasFeature = true end
+            elseif d:IsA("BoolValue") then hasFeature = true table.insert(boolVals,d)
+            elseif d:IsA("ProximityPrompt") or d:IsA("ClickDetector") or d:IsA("AnimationController") or d:IsA("Animator") or d:IsA("Seat") or d:IsA("Attachment") or d:IsA("Sound") or d:IsA("ValueBase") then hasFeature = true end
+        end
+        local h = (maxY > minY) and (maxY-minY) or part.Size.Y
+        if h < 3.5 or not hasFeature then return end
+        Cache[hookObj] = {part=part,boolVals=boolVals,hl=hookObj:FindFirstChild("EssentialESP")}
+        table.insert(trackedHooks,hookObj)
+    end
+    local function RegisterGate(gateObj)
+        if not gateObj or not gateObj.Parent or Cache[gateObj] or IsCharacter(gateObj) then return end
+        local valid, part = false, nil
+        if gateObj:IsA("Model") then
+            local ok, size = pcall(function() return gateObj:GetExtentsSize() end)
+            valid = ok and size and math.max(size.X,size.Z) >= 7 and size.Y >= 6
+            part = Target(gateObj)
+        elseif gateObj:IsA("BasePart") then
+            local size = gateObj.Size
+            valid = math.max(size.X,size.Z) >= 7 and size.Y >= 6
+            if valid then part = gateObj end
+        end
+        if not valid or not part then return end
+        Cache[gateObj] = {part=part,hl=gateObj:FindFirstChild("EssentialESP")}
+        if not table.find(trackedGates,gateObj) then table.insert(trackedGates,gateObj) end
+    end
+    local function IsGenCompleted(gen,data)
+        for k, v in pairs(gen:GetAttributes()) do
+            local n = string.lower(k)
+            if type(v) == "boolean" then
+                if Any(n,{"comp","done","finish","repair","activ","power","fix","on"}) and v == true then return true end
+                if Any(n,{"canrepair","interact"}) and v == false then return true end
+            elseif type(v) == "number" and Any(n,{"prog","repair","charge","perc"}) then
+                local maxA = gen:GetAttribute("MaxProgress") or gen:GetAttribute("Max") or gen:GetAttribute("Required") or gen:GetAttribute("Goal")
+                if type(maxA) == "number" and maxA > 0 and v >= maxA-0.01 then return true end
+                if (v >= 0.999 and v <= 1.001) or v >= 100 then return true end
+            elseif type(v) == "string" then
+                local st = string.lower(v)
+                if st == "completed" or st == "done" or st == "repaired" or st == "finished" or st == "powered" or st == "on" or st == "fixed" then return true end
+            end
+        end
+        for i = 1, #data.boolVals do
+            local bv = data.boolVals[i]
+            if bv and bv.Parent and bv.Value == true and Any(string.lower(bv.Name),{"comp","done","finish","repair","activ","power","fix","on"}) then return true end
+        end
+        for i = 1, #data.progVals do
+            local pv = data.progVals[i]
+            if pv and pv.Parent then
+                local n, v = string.lower(pv.Name), pv.Value
+                if Any(n,{"prog","repair","charge","perc"}) or n == "value" then
+                    if (v >= 0.999 and v <= 1.001) or v >= 100 then return true end
+                elseif Any(n,{"left","remain"}) and data.initNums[pv] and data.initNums[pv] > 0 and v <= 0 then return true end
+            end
+        end
+        for i = 1, #data.strVals do
+            local sv = data.strVals[i]
+            if sv and sv.Parent then
+                local st = string.lower(sv.Value)
+                if st == "completed" or st == "done" or st == "repaired" or st == "finished" or st == "powered" or st == "activated" then return true end
+            end
+        end
+        for i = 1, #data.textLabels do
+            local tl = data.textLabels[i]
+            if tl and tl.Parent then
+                local txt = string.lower(tl.Text or "")
+                if Has(txt,"100%") or txt == "done" or txt == "completed" or txt == "repaired" then return true end
+            end
+        end
+        for i = 1, #data.lights do
+            local light = data.lights[i]
+            if light and light.Parent then
+                local init = data.initLights[light]
+                if init and (not init.enabled or init.brightness <= 0.05) and light.Enabled and light.Brightness > 0.2 and light.Range >= 8 then return true end
+                if light.Enabled and light.Range >= 12 and light.Brightness >= 1 and light.Color.G > 0.65 and light.Color.B > 0.55 then
+                    if init and (not init.enabled or init.color ~= light.Color or init.range < light.Range) then return true end
+                end
+            end
+        end
+        for i = 1, #data.lampParts do
+            local lp = data.lampParts[i]
+            if lp and lp.Parent then
+                local init = data.initMats[lp]
+                if init then
+                    if init.mat ~= Enum.Material.Neon and lp.Material == Enum.Material.Neon and lp.Transparency < 0.8 then return true end
+                    if lp.Color.G > 0.7 and lp.Color.R < 0.35 and (init.col.G <= 0.5 or init.col.R >= 0.5) then return true end
+                end
+            end
+        end
+        if #data.prompts > 0 then
+            local enabled = false
+            for i = 1, #data.prompts do
+                local pr = data.prompts[i]
+                if pr and pr.Parent and pr.Enabled then enabled = true data.hadEnabledPrompt = true break end
+            end
+            if data.hadEnabledPrompt and not enabled and not gen:GetAttribute("Blocked") then return true end
+        end
+        return false
+    end
+    local function IsPalletDroppable(pallet,data)
+        local part = data.part
+        if not part or not part.Parent or part.Transparency >= 0.85 then return false end
+        if Any(string.lower(pallet.Name),{"dropped","broken","down","destroy"}) then return false end
+        if pallet:GetAttribute("Dropped") == true or pallet:GetAttribute("IsDropped") == true or pallet:GetAttribute("Down") == true or pallet:GetAttribute("Broken") == true or pallet:GetAttribute("Used") == true or pallet:GetAttribute("Activated") == true or pallet:GetAttribute("CanDrop") == false or pallet:GetAttribute("Active") == false then return false end
+        local st = pallet:GetAttribute("State") or pallet:GetAttribute("Status")
+        if type(st) == "string" then
+            st = string.lower(st)
+            if st == "dropped" or st == "down" or st == "fallen" or st == "broken" or st == "used" or st == "destroyed" then return false end
+        end
+        for i = 1, #data.boolVals do
+            local bv = data.boolVals[i]
+            if bv and bv.Parent then
+                local n = string.lower(bv.Name)
+                if Any(n,{"drop","down","used","brok","activ"}) and bv.Value == true then return false end
+                if Any(n,{"candrop","active","standing"}) and bv.Value == false then return false end
+            end
+        end
+        for i = 1, #data.strVals do
+            local sv = data.strVals[i]
+            if sv and sv.Parent then
+                local st = string.lower(sv.Value)
+                if st == "dropped" or st == "down" or st == "fallen" or st == "broken" or st == "used" or st == "destroyed" then return false end
+            end
+        end
+        if #data.prompts > 0 then
+            local hasDrop = false
+            for i = 1, #data.prompts do
+                local pr = data.prompts[i]
+                if pr and pr.Parent and pr.Enabled then
+                    local txt = string.lower((pr.ActionText or "") .. " " .. (pr.ObjectText or "") .. " " .. pr.Name)
+                    if Any(txt,{"vault","slide","break","destroy"}) then return false end
+                    hasDrop = true
+                end
+            end
+            if not hasDrop then return false end
+        end
+        local cf = part.CFrame
+        if cf.UpVector:Dot(data.initUp) < 0.90 or cf.LookVector:Dot(data.initLook) < 0.90 then return false end
+        local h = Height(part)
+        return h >= 3.0 and h >= data.initHeight*0.84
+    end
+    local function IsHookUsable(obj,data)
+        if not data.part or not data.part.Parent then return false end
+        if Any(string.lower(obj.Name),{"broken","sabotag","destroy"}) then return false end
+        if obj:GetAttribute("Broken") == true or obj:GetAttribute("Sabotaged") == true or obj:GetAttribute("Active") == false then return false end
+        for i = 1, #data.boolVals do
+            local bv = data.boolVals[i]
+            if bv and bv.Parent and bv.Value == true and Any(string.lower(bv.Name),{"brok","sabo","destroy"}) then return false end
+        end
+        return true
+    end
+    local function SetHighlight(obj,data,show,r,g,b)
+        local hl = data and data.hl or obj:FindFirstChild("EssentialESP")
+        if show then
+            if not hl or hl.Parent ~= obj then
+                hl = obj:FindFirstChild("EssentialESP")
+                if not hl then
+                    hl = Instance.new("Highlight") hl.Name = "EssentialESP"
+                    hl.OutlineColor = Color3.fromRGB(255,255,255)
+                    hl.FillTransparency = 0.5 hl.OutlineTransparency = 0.2
+                    hl.DepthMode = Enum.HighlightDepthMode.AlwaysOnTop hl.Parent = obj
+                end
+                if data then data.hl = hl end
+            end
+            hl.FillColor = Color3.fromRGB(r,g,b)
+        elseif hl then
+            pcall(function() hl:Destroy() end)
+            if data then data.hl = nil end
+        else
+            local old = obj:FindFirstChild("EssentialESP")
+            if old then pcall(function() old:Destroy() end) end
+        end
+    end
+    local function CheckObject(obj)
+        if not obj or not obj.Parent or not (obj:IsA("Model") or obj:IsA("BasePart")) then return end
+        local gen = GetRootModel(obj,IsGenName)
+        if gen then RegisterGenerator(gen) return end
+        local pallet = GetRootModel(obj,IsPalletName)
+        if pallet then RegisterPallet(pallet) return
+        elseif obj:IsA("BasePart") and IsPalletName(obj) then RegisterPallet(obj) return end
+        local hook = GetRootModel(obj,IsHookName)
+        if hook then RegisterHook(hook) return end
+        local gate = GetRootModel(obj,IsGateName)
+        if gate then RegisterGate(gate) return
+        elseif IsGateName(obj) then RegisterGate(obj) end
+    end
+    UI_Elements._ESPStep = function(myPos,espBlocked)
+        for i = #trackedGenerators, 1, -1 do
+            local obj = trackedGenerators[i]
+            local data = Cache[obj]
+            if obj and obj.Parent and data and data.part and data.part.Parent then
+                local show = Settings.GeneratorESP and not espBlocked and (myPos-data.part.Position).Magnitude <= MAX_ESP_DISTANCE and not IsGenCompleted(obj,data)
+                SetHighlight(obj,data,show,Settings.GeneratorR,Settings.GeneratorG,Settings.GeneratorB)
+            else table.remove(trackedGenerators,i) end
+        end
+        for i = #trackedPallets, 1, -1 do
+            local obj = trackedPallets[i]
+            local data = Cache[obj]
+            if obj and obj.Parent and data and data.part and data.part.Parent then
+                local show = Settings.PalletESP and not espBlocked and (myPos-data.part.Position).Magnitude <= MAX_ESP_DISTANCE and IsPalletDroppable(obj,data)
+                SetHighlight(obj,data,show,Settings.PalletR,Settings.PalletG,Settings.PalletB)
+            else
+                if obj and obj.Parent then SetHighlight(obj,data,false) end
+                table.remove(trackedPallets,i)
+            end
+        end
+        for i = #trackedHooks, 1, -1 do
+            local obj = trackedHooks[i]
+            local data = Cache[obj]
+            if obj and obj.Parent and data and data.part and data.part.Parent then
+                local show = Settings.HookESP and not espBlocked and (myPos-data.part.Position).Magnitude <= MAX_ESP_DISTANCE and IsHookUsable(obj,data)
+                SetHighlight(obj,data,show,Settings.HookR,Settings.HookG,Settings.HookB)
+            else table.remove(trackedHooks,i) end
+        end
+        for i = #trackedGates, 1, -1 do
+            local obj = trackedGates[i]
+            local data = Cache[obj]
+            if obj and obj.Parent and data and data.part and data.part.Parent then
+                SetHighlight(obj,data,Settings.GateESP and not espBlocked,Settings.GateR,Settings.GateG,Settings.GateB)
+            else
+                if obj and obj.Parent then SetHighlight(obj,data,false) end
+                table.remove(trackedGates,i)
+            end
+        end
+    end
+    task.spawn(function()
+        local allObjs = workspace:GetDescendants()
+        for i = 1, #allObjs do
+            CheckObject(allObjs[i])
+            if i % 1500 == 0 then task.wait() end
+        end
+    end)
+    table.insert(connections,workspace.DescendantAdded:Connect(function(obj)
+        if obj:IsA("Model") or obj:IsA("BasePart") then task.defer(CheckObject,obj)
+        elseif obj:IsA("ValueBase") or obj:IsA("ProximityPrompt") or obj:IsA("Light") or obj:IsA("TextLabel") then
+            task.defer(function()
+                local gen = GetRootModel(obj,IsGenName)
+                if gen and Cache[gen] then ScanGenerator(gen) end
+            end)
+        end
+    end))
+end)();
 
 -- UNLOAD
 local function UnloadScript()
     for _, conn in ipairs(connections) do if conn then pcall(function() conn:Disconnect() end) end end
     if noclipConnection then noclipConnection:Disconnect() noclipConnection = nil end
-    RestoreNoclipCollisions() DisconnectSkyboxGuards() ResetSkybox() TerminateEssentialHUD() RestoreLowGraphics()
+    if cameraFovConnection then pcall(function() cameraFovConnection:Disconnect() end) cameraFovConnection = nil end
+    pcall(function() RunService:UnbindFromRenderStep("EssentialFOVLock") end)
+    pcall(function() RunService:UnbindFromRenderStep("EssentialMoonwalk") end)
+    if moonwalkHeartbeatConn then pcall(function() moonwalkHeartbeatConn:Disconnect() end) moonwalkHeartbeatConn = nil end
+    moonwalkBound = false
+    pcall(RestoreAutoRotate)
+    RestoreNoclipCollisions() ResetSkybox() TerminateEssentialHUD() RestoreLowGraphics()
     Lighting.FogStart = DefaultLighting.FogStart Lighting.FogEnd = DefaultLighting.FogEnd
     if not Settings.SkyEnabled then Lighting.FogColor = DefaultLighting.FogColor end
-    for _, p in pairs(Players:GetPlayers()) do 
-        if p.Character then 
-            if p.Character:FindFirstChild("EssentialESP") then p.Character.EssentialESP:Destroy() end 
+    for _, p in pairs(Players:GetPlayers()) do
+        if p.Character then
+            if p.Character:FindFirstChild("EssentialESP") then p.Character.EssentialESP:Destroy() end
             if p.Character:FindFirstChild("EssentialNameTag") then p.Character.EssentialNameTag:Destroy() end
-        end 
+        end
     end
-    for _, gen in ipairs(trackedGenerators) do 
-        if gen and gen.Parent then 
-            if gen:FindFirstChild("EssentialESP") then gen.EssentialESP:Destroy() end 
-            if gen:FindFirstChild("EssentialGenTag") then gen.EssentialGenTag:Destroy() end 
-        end 
+    for _, gen in ipairs(trackedGenerators) do
+        if gen and gen.Parent then
+            if gen:FindFirstChild("EssentialESP") then gen.EssentialESP:Destroy() end
+            if gen:FindFirstChild("EssentialGenTag") then gen.EssentialGenTag:Destroy() end
+        end
     end
     for _, pallet in ipairs(trackedPallets) do if pallet and pallet.Parent and pallet:FindFirstChild("EssentialESP") then pallet.EssentialESP:Destroy() end end
     for _, hookObj in ipairs(trackedHooks) do if hookObj and hookObj.Parent and hookObj:FindFirstChild("EssentialESP") then hookObj.EssentialESP:Destroy() end end
     for _, gate in ipairs(trackedGates) do if gate and gate.Parent and gate:FindFirstChild("EssentialESP") then gate.EssentialESP:Destroy() end end
     if currentLight then currentLight:Destroy() end
-    if workspace.CurrentCamera then workspace.CurrentCamera.FieldOfView = 70 end
-    if LocalPlayer.Character and LocalPlayer.Character:FindFirstChild("Humanoid") then LocalPlayer.Character.Humanoid.WalkSpeed = 16 end
+    if workspace.CurrentCamera then workspace.CurrentCamera.FieldOfView = DefaultFOV end
+    if LocalPlayer.Character and LocalPlayer.Character:FindFirstChild("Humanoid") then
+        LocalPlayer.Character.Humanoid.WalkSpeed = 16
+        LocalPlayer.Character.Humanoid.AutoRotate = true
+    end
     if CrosshairCenter then CrosshairCenter:Destroy() end
     ScreenGui:Destroy()
 end
@@ -993,8 +2188,8 @@ local lastLegitSpeedValue = 0
 
 table.insert(connections, RunService.RenderStepped:Connect(function(delta)
     pcall(function()
+        if Settings.SkyEnabled then pcall(EnforceSkybox) end
         if workspace.CurrentCamera then
-            workspace.CurrentCamera.FieldOfView = Settings.FOVEnabled and Settings.FOV or 70
             if Settings.Stretch then
                 local ratio = getStretchRatio()
                 if ratio ~= 1 then
@@ -1063,7 +2258,7 @@ table.insert(connections, RunService.RenderStepped:Connect(function(delta)
                 currentLight.Color = Color3.fromRGB(Settings.FlashR, Settings.FlashG, Settings.FlashB) currentLight.Range = Settings.FlashRange
             else if currentLight then currentLight:Destroy() currentLight = nil end end
         end
-        
+
         -- ESP OBJECTS + LOBBY CHECK
         local myRoot = LocalPlayer.Character and LocalPlayer.Character:FindFirstChild("HumanoidRootPart")
         local espBlocked = false
@@ -1075,191 +2270,146 @@ table.insert(connections, RunService.RenderStepped:Connect(function(delta)
             end
             if LocalPlayer:GetAttribute("InLobby") == true then espBlocked = true end
         end)
-        
+
         if myRoot then
             local myPos = myRoot.Position
-            
-            -- GENERATORS (NO LABELS)
-            for i = #trackedGenerators, 1, -1 do
-                local gen = trackedGenerators[i]
-                if gen and gen.Parent then
-                    local highlight = gen:FindFirstChild("EssentialESP")
-                    local oldTag = gen:FindFirstChild("EssentialGenTag")
-                    if oldTag then oldTag:Destroy() end
-                    
-                    local targetPart = gen:IsA("Model") and gen.PrimaryPart or gen:IsA("BasePart") and gen or gen:FindFirstChildWhichIsA("BasePart")
-                    if targetPart then
-                        local dist = (myPos - targetPart.Position).Magnitude
-                        local isCompleted = false
-                        local progVal = gen:GetAttribute("Progress") or gen:GetAttribute("Charge")
-                        if not progVal then
-                            local valObj = gen:FindFirstChild("Progress") or gen:FindFirstChild("Charge") or gen:FindFirstChild("Value")
-                            if valObj and (valObj:IsA("NumberValue") or valObj:IsA("IntValue")) then progVal = valObj.Value end
-                        end
-                        if type(progVal) == "number" then
-                            if (progVal <= 1 and progVal >= 1) or (progVal > 1 and progVal >= 100) then isCompleted = true end
-                        end
-                        if gen:GetAttribute("Completed") == true or gen:GetAttribute("Done") == true or gen:GetAttribute("Finished") == true then
-                            isCompleted = true
-                        end
-                        
-                        if Settings.GeneratorESP and not espBlocked and dist <= MAX_ESP_DISTANCE and not isCompleted then
-                            if not highlight then
-                                highlight = Instance.new("Highlight") highlight.Name = "EssentialESP" highlight.OutlineColor = Color3.fromRGB(255, 255, 255) highlight.FillTransparency = 0.5 highlight.OutlineTransparency = 0.2 highlight.DepthMode = Enum.HighlightDepthMode.AlwaysOnTop highlight.Parent = gen
-                            end
-                            highlight.FillColor = Color3.fromRGB(Settings.GeneratorR, Settings.GeneratorG, Settings.GeneratorB)
-                        else
-                            if highlight then highlight:Destroy() end
-                        end
-                    else
-                        if highlight then highlight:Destroy() end
-                    end
-                else table.remove(trackedGenerators, i) end
-            end
-            
-            -- PALLETS
-            for i = #trackedPallets, 1, -1 do
-                local pallet = trackedPallets[i]
-                if pallet and pallet.Parent then
-                    local highlight = pallet:FindFirstChild("EssentialESP")
-                    local targetPart = pallet:IsA("Model") and pallet.PrimaryPart or pallet:IsA("BasePart") and pallet or pallet:FindFirstChildWhichIsA("BasePart")
-                    if targetPart then
-                        local dist = (myPos - targetPart.Position).Magnitude
-                        if Settings.PalletESP and not espBlocked and dist <= MAX_ESP_DISTANCE then
-                            if not highlight then
-                                highlight = Instance.new("Highlight") highlight.Name = "EssentialESP" highlight.OutlineColor = Color3.fromRGB(255, 255, 255) highlight.FillTransparency = 0.5 highlight.OutlineTransparency = 0.2 highlight.DepthMode = Enum.HighlightDepthMode.AlwaysOnTop highlight.Parent = pallet
-                            end
-                            highlight.FillColor = Color3.fromRGB(Settings.PalletR, Settings.PalletG, Settings.PalletB)
-                        else 
-                            if highlight then highlight:Destroy() end 
-                        end
-                    end
-                else table.remove(trackedPallets, i) end
-            end
-            
-            -- HOOKS
-            for i = #trackedHooks, 1, -1 do
-                local hookObj = trackedHooks[i]
-                if hookObj and hookObj.Parent then
-                    local isBroken = false
-                    local lname = string.lower(hookObj.Name)
-                    if string.find(lname, "broken") or string.find(lname, "destroyed") then isBroken = true end
-                    if hookObj:GetAttribute("Broken") == true or hookObj:GetAttribute("Active") == false then isBroken = true end
-                    local highlight = hookObj:FindFirstChild("EssentialESP")
-                    local targetPart = hookObj:IsA("Model") and (hookObj.PrimaryPart or hookObj:FindFirstChildWhichIsA("BasePart", true)) or (hookObj:IsA("BasePart") and hookObj or hookObj:FindFirstChildWhichIsA("BasePart", true))
-                    if targetPart and not isBroken then
-                        local dist = (myPos - targetPart.Position).Magnitude
-                        if Settings.HookESP and not espBlocked and dist <= MAX_ESP_DISTANCE then
-                            if not highlight then
-                                highlight = Instance.new("Highlight") highlight.Name = "EssentialESP" highlight.OutlineColor = Color3.fromRGB(255, 255, 255) highlight.FillTransparency = 0.5 highlight.OutlineTransparency = 0.2 highlight.DepthMode = Enum.HighlightDepthMode.AlwaysOnTop highlight.Parent = hookObj
-                            end
-                            highlight.FillColor = Color3.fromRGB(Settings.HookR, Settings.HookG, Settings.HookB)
-                        else 
-                            if highlight then highlight:Destroy() end 
-                        end
-                    else 
-                        if highlight then highlight:Destroy() end 
-                    end
-                else table.remove(trackedHooks, i) end
-            end
-            
-            -- GATES
-            for i = #trackedGates, 1, -1 do
-                local gate = trackedGates[i]
-                if gate and gate.Parent then
-                    local highlight = gate:FindFirstChild("EssentialESP")
-                    local targetPart = gate:IsA("Model") and gate.PrimaryPart or gate:IsA("BasePart") and gate or gate:FindFirstChildWhichIsA("BasePart")
-                    if targetPart then
-                        if Settings.GateESP and not espBlocked then
-                            if not highlight then
-                                highlight = Instance.new("Highlight") highlight.Name = "EssentialESP" highlight.OutlineColor = Color3.fromRGB(255, 255, 255) highlight.FillTransparency = 0.5 highlight.OutlineTransparency = 0.2 highlight.DepthMode = Enum.HighlightDepthMode.AlwaysOnTop highlight.Parent = gate
-                            end
-                            highlight.FillColor = Color3.fromRGB(Settings.GateR, Settings.GateG, Settings.GateB)
-                        else 
-                            if highlight then highlight:Destroy() end 
-                        end
-                    end
-                else table.remove(trackedGates, i) end
+            if UI_Elements._ESPStep then
+                UI_Elements._ESPStep(myPos, espBlocked)
             end
         end
-        
-        -- PLAYER ESP + STAFF TAGS
+
+        -- PLAYER ESP + STAFF TAGS (tags live in ScreenGui so game character scripts can never delete them)
+        local function GetPlayerStaffRole(plr)
+            if not plr then return nil end
+            if StaffList[plr.Name] then return StaffList[plr.Name] end
+            if plr.DisplayName and StaffList[plr.DisplayName] then return StaffList[plr.DisplayName] end
+            local ln = string.lower(plr.Name)
+            local ld = plr.DisplayName and string.lower(plr.DisplayName) or ""
+            for k, v in pairs(StaffList) do
+                local lk = string.lower(k)
+                if lk == ln or lk == ld then return v end
+            end
+            local attrRole = plr:GetAttribute("StaffRole") or plr:GetAttribute("Role") or plr:GetAttribute("Rank")
+            if type(attrRole) == "string" then
+                local ar = string.lower(attrRole)
+                if string.find(ar, "dev") or string.find(ar, "owner") or string.find(ar, "creator") then return "Dev" end
+                if string.find(ar, "test") or string.find(ar, "qa") then return "Tester" end
+                if string.find(ar, "mod") or string.find(ar, "admin") or string.find(ar, "staff") then return "Staff" end
+            end
+            if plr:GetAttribute("IsDev") == true or plr:GetAttribute("Developer") == true then return "Dev" end
+            if plr:GetAttribute("IsTester") == true or plr:GetAttribute("Tester") == true then return "Tester" end
+            if plr:GetAttribute("IsStaff") == true or plr:GetAttribute("IsAdmin") == true then return "Staff" end
+            return nil
+        end
+
         for _, player in pairs(Players:GetPlayers()) do
-            if player ~= LocalPlayer and player.Character then
-                local isManiac = isPlayerManiac(player)
+            local char = player.Character
+            local tagGuiName = "EssentialTag_" .. tostring(player.UserId)
+            local existingGuiTag = ScreenGui and ScreenGui:FindFirstChild(tagGuiName) or nil
+
+            if char then
+                local isSelf = (player == LocalPlayer)
+                local isManiac = (not isSelf) and isPlayerManiac(player) or false
                 local inLobby = false
                 if player.Team and (string.find(string.lower(player.Team.Name), "lobby") or string.find(string.lower(player.Team.Name), "menu") or string.find(string.lower(player.Team.Name), "spectat")) then
                     inLobby = true
                 end
-                local hum = player.Character:FindFirstChild("Humanoid")
-                if hum and hum.Health <= 0 then inLobby = true end
-                local hrp = player.Character:FindFirstChild("HumanoidRootPart")
+                local hum = char:FindFirstChildOfClass("Humanoid")
+                local charDead = hum and hum.Health <= 0
+                if charDead then inLobby = true end
+                local hrp = char:FindFirstChild("HumanoidRootPart")
                 if hrp and myRoot and (hrp.Position - myRoot.Position).Magnitude > 3000 then
                     inLobby = true
                 end
-                
-                local highlight = player.Character:FindFirstChild("EssentialESP")
-                local nameTag = player.Character:FindFirstChild("EssentialNameTag")
-                local shouldHighlight = false 
+
+                local staffRole = GetPlayerStaffRole(player)
+                local isStaff = (staffRole ~= nil)
+                local wantStaffTag = Settings.StaffTags and isStaff and not charDead
+
+                local highlight = char:FindFirstChild("EssentialESP")
+                local legacyTag = char:FindFirstChild("EssentialNameTag")
+                if legacyTag then pcall(function() legacyTag:Destroy() end) end
+
+                local shouldHighlight = false
                 local highlightColor = Color3.fromRGB(255, 255, 255)
-                
-                if not espBlocked and not inLobby then
-                    if isManiac and Settings.ManiacESP then 
-                        shouldHighlight = true 
+
+                if not isSelf and not espBlocked and not inLobby then
+                    if isManiac and Settings.ManiacESP then
+                        shouldHighlight = true
                         highlightColor = Color3.fromRGB(Settings.ManiacR, Settings.ManiacG, Settings.ManiacB)
-                    elseif not isManiac and Settings.SurvivorESP then 
-                        shouldHighlight = true 
-                        highlightColor = Color3.fromRGB(Settings.SurvivorR, Settings.SurvivorG, Settings.SurvivorB) 
+                    elseif not isManiac and Settings.SurvivorESP then
+                        shouldHighlight = true
+                        highlightColor = Color3.fromRGB(Settings.SurvivorR, Settings.SurvivorG, Settings.SurvivorB)
                     end
                 end
-                
+
                 if shouldHighlight then
                     if not highlight then
-                        highlight = Instance.new("Highlight") highlight.Name = "EssentialESP" highlight.OutlineColor = Color3.fromRGB(255, 255, 255) highlight.FillTransparency = 0.5 highlight.OutlineTransparency = 0.2 highlight.DepthMode = Enum.HighlightDepthMode.AlwaysOnTop highlight.Parent = player.Character
+                        highlight = Instance.new("Highlight")
+                        highlight.Name = "EssentialESP"
+                        highlight.OutlineColor = Color3.fromRGB(255, 255, 255)
+                        highlight.FillTransparency = 0.5
+                        highlight.OutlineTransparency = 0.2
+                        highlight.DepthMode = Enum.HighlightDepthMode.AlwaysOnTop
+                        highlight.Parent = char
                     end
                     highlight.FillColor = highlightColor
-                    if not nameTag then
-                        nameTag = Instance.new("BillboardGui")
-                        nameTag.Name = "EssentialNameTag"
-                        nameTag.Size = UDim2.new(0, 300, 0, 50)
-                        nameTag.StudsOffset = Vector3.new(0, 3, 0)
-                        nameTag.AlwaysOnTop = true
+                else
+                    if highlight then pcall(function() highlight:Destroy() end) end
+                end
+
+                local head = char:FindFirstChild("Head") or hrp or char:FindFirstChildWhichIsA("BasePart")
+                local wantTag = (shouldHighlight or wantStaffTag) and (head ~= nil)
+
+                if wantTag then
+                    if not existingGuiTag then
+                        existingGuiTag = Instance.new("BillboardGui")
+                        existingGuiTag.Name = tagGuiName
+                        existingGuiTag.Size = UDim2.new(0, 340, 0, 52)
+                        existingGuiTag.StudsOffset = Vector3.new(0, 3.4, 0)
+                        existingGuiTag.AlwaysOnTop = true
+                        existingGuiTag.MaxDistance = 3500
                         local textLabel = Instance.new("TextLabel")
                         textLabel.Name = "NameText"
                         textLabel.Size = UDim2.new(1, 0, 1, 0)
                         textLabel.BackgroundTransparency = 1
                         textLabel.Font = Enum.Font.GothamBold
-                        textLabel.TextSize = 14
-                        textLabel.TextStrokeTransparency = 0.2
+                        textLabel.TextSize = 15
+                        textLabel.TextStrokeTransparency = 0.05
                         textLabel.TextStrokeColor3 = Color3.new(0, 0, 0)
                         textLabel.RichText = true
-                        textLabel.Parent = nameTag
-                        local head = player.Character:FindFirstChild("Head") or player.Character:FindFirstChild("HumanoidRootPart")
-                        if head then
-                            nameTag.Adornee = head
-                            nameTag.Parent = player.Character
-                        end
+                        textLabel.Parent = existingGuiTag
+                        existingGuiTag.Parent = ScreenGui
                     end
-                    if nameTag and nameTag:FindFirstChild("NameText") then
+                    existingGuiTag.Adornee = head
+                    existingGuiTag.Enabled = true
+                    local nt = existingGuiTag:FindFirstChild("NameText")
+                    if nt then
                         local finalText = player.Name
-                        if Settings.StaffTags then
-                            local role = StaffList[player.Name]
-                            if role == "Dev" then
-                                finalText = '<font color="#8B0000">[</font><font color="#FF0000">Dev</font><font color="#800020">]</font> ' .. player.Name
-                            elseif role == "Tester" then
-                                finalText = '<font color="#7FFFD4">[</font><font color="#5FECC4">T</font><font color="#4FDAB4">e</font><font color="#3FC8A4">s</font><font color="#2FB694">t</font><font color="#1FA484">e</font><font color="#0F9274">r</font><font color="#7FFFD4">]</font> ' .. player.Name
+                        local tagColor = shouldHighlight and highlightColor or Color3.fromRGB(255, 255, 255)
+                        if isStaff and Settings.StaffTags then
+                            if staffRole == "Dev" then
+                                finalText = '<font color="#FF3B3B">[Dev]</font> ' .. player.Name
+                                if not shouldHighlight then tagColor = Color3.fromRGB(255, 95, 95) end
+                            elseif staffRole == "Tester" then
+                                finalText = '<font color="#5FECC4">[Tester]</font> ' .. player.Name
+                                if not shouldHighlight then tagColor = Color3.fromRGB(95, 236, 196) end
+                            else
+                                finalText = '<font color="#C084FC">[' .. tostring(staffRole) .. ']</font> ' .. player.Name
+                                if not shouldHighlight then tagColor = Color3.fromRGB(192, 132, 252) end
                             end
                         end
-                        nameTag.NameText.Text = finalText
-                        nameTag.NameText.TextColor3 = highlightColor
+                        nt.Text = finalText
+                        nt.TextColor3 = tagColor
                     end
-                else 
-                    if highlight then highlight:Destroy() end 
-                    if nameTag then nameTag:Destroy() end
+                else
+                    if existingGuiTag then pcall(function() existingGuiTag:Destroy() end) end
                 end
+            else
+                if existingGuiTag then pcall(function() existingGuiTag:Destroy() end) end
             end
         end
     end)
 end))
 
-print("[Essential Recode]: Low Graphics Update Loaded!")
+print("[Essential Recode]: FIX v3 loaded (sky atmo+cc / screengui stafftags / lowgfx full restore / fov metatable lock / moonwalk v3)")
