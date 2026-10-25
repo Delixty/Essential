@@ -25,7 +25,7 @@ local Settings = {
     HookESP = false, HookR = 255, HookG = 0, HookB = 0,
     GateESP = false, GateR = 0, GateG = 255, GateB = 255,
     FOVEnabled = false, FOV = 70,
-    Speedhack = false, SpeedValue = 22, SpeedMode = "Legit", wasSpeedhack = false,
+    Speedhack = false, SpeedValue = 22, SpeedMode = "Legit",
     Jumphack = false, JumpPower = 50,
     Flashlight = false, FlashR = 255, FlashG = 255, FlashB = 255, FlashRange = 60,
     CustomFog = false, FogStart = 0, FogEnd = 1000, FogR = 150, FogG = 150, FogB = 150,
@@ -44,15 +44,16 @@ local Settings = {
 
     MenuKeybind = "RightShift",
     PillPosition = "BottomCenter", -- TopLeft, TopCenter, TopRight, BottomLeft, BottomCenter, BottomRight
-    DeviceMode = "PC", AccentR = 168, AccentG = 85, AccentB = 247
+    DeviceMode = "PC", AccentR = 100, AccentG = 100, AccentB = 255,
+    SoundPlayerEnabled = false, SoundPlayerId = "", SoundPlayerVolume = 50, SoundPlayerDesign = "Compact", SoundPlayerCollapsed = false
 }
 
 local function ApplyTheme()
     local base = Color3.fromRGB(Settings.AccentR, Settings.AccentG, Settings.AccentB)
     local h, s, v = Color3.toHSV(base)
-    local gradEnd = Color3.fromHSV(h, s, math.clamp(v - 0.2, 0, 1))
-    local strokeMain = Color3.fromHSV(h, s, math.clamp(v - 0.25, 0, 1))
-    local strokeDark = Color3.fromHSV(h, s, math.clamp(v - 0.6, 0.1, 1))
+    local gradEnd = base:Lerp(Color3.new(1,1,1),0.08)
+    local strokeMain = base
+    local strokeDark = base:Lerp(Color3.fromRGB(17,13,26),0.68)
     local gradSeq = ColorSequence.new({
         ColorSequenceKeypoint.new(0, base),
         ColorSequenceKeypoint.new(1, gradEnd)
@@ -75,6 +76,13 @@ local function ApplyTheme()
     for i = #ThemeElements.Scrollbars, 1, -1 do
         local obj = ThemeElements.Scrollbars[i]
         if obj and obj.Parent then obj.ScrollBarImageColor3 = strokeMain else table.remove(ThemeElements.Scrollbars, i) end
+    end
+    if ThemeElements.HoverButtons then
+        for obj in pairs(ThemeElements.HoverButtons) do
+            if obj.Parent and obj:GetAttribute("EssentialHovered") then
+                obj.BackgroundColor3 = base:Lerp(Color3.fromRGB(4,4,4), 0.65)
+            end
+        end
     end
     if UI_Elements.RefreshPillSelectorTheme then
         UI_Elements.RefreshPillSelectorTheme(base, strokeMain, strokeDark)
@@ -718,11 +726,11 @@ table.insert(connections, RunService.Stepped:Connect(ForceFOV))
 -- ==============================================
 -- UI SETUP & PILL POSITIONING SYSTEM (6 OPTIONS)
 -- ==============================================
-local BgMain = Color3.fromRGB(10, 10, 10)
-local BgHeader = Color3.fromRGB(16, 16, 16)
-local BgSidebar = Color3.fromRGB(14, 14, 14)
-local BgElement = Color3.fromRGB(20, 20, 20)
-local BgDark = Color3.fromRGB(4, 4, 4)
+local BgMain = Color3.fromRGB(15, 12, 23)
+local BgHeader = Color3.fromRGB(19, 15, 29)
+local BgSidebar = Color3.fromRGB(24, 18, 35)
+local BgElement = Color3.fromRGB(30, 24, 43)
+local BgDark = Color3.fromRGB(17, 13, 26)
 local TextColor = Color3.fromRGB(245, 245, 245)
 local TextMuted = Color3.fromRGB(130, 130, 130)
 
@@ -748,14 +756,26 @@ MainFrame.AnchorPoint = Vector2.new(0.5, 0.5)
 MainFrame.Size = UDim2.new(0, 200, 0, 45)
 MainFrame.BackgroundColor3 = BgMain
 MainFrame.BorderSizePixel = 0
-MainFrame.ClipsDescendants = true
+MainFrame.ClipsDescendants = false
+MainFrame.BackgroundTransparency = 1
 Instance.new("UICorner", MainFrame).CornerRadius = UDim.new(0, 12)
 local MainStroke = Instance.new("UIStroke", MainFrame) MainStroke.Thickness = 1.5
+MainStroke.ApplyStrokeMode = Enum.ApplyStrokeMode.Border
+MainStroke.LineJoinMode = Enum.LineJoinMode.Round
 table.insert(ThemeElements.MainStrokes, MainStroke)
 local MainUIScale = Instance.new("UIScale", MainFrame) MainUIScale.Scale = 1
+local MainClip = Instance.new("CanvasGroup", MainFrame)
+MainClip.Name = "MainContentClip"
+MainClip.Position = UDim2.fromOffset(2, 2)
+MainClip.Size = UDim2.new(1, -4, 1, -4)
+MainClip.BackgroundColor3 = BgMain
+MainClip.BorderSizePixel = 0
+MainClip.ZIndex = 1
+Instance.new("UICorner", MainClip).CornerRadius = UDim.new(0, 10)
 
-local Header = Instance.new("Frame", MainFrame) Header.Size = UDim2.new(1, 0, 0, 45) Header.BackgroundColor3 = BgHeader Header.BorderSizePixel = 0 Instance.new("UICorner", Header).CornerRadius = UDim.new(0, 12)
-local HeaderBottom = Instance.new("Frame", Header) HeaderBottom.Size = UDim2.new(1, 0, 0, 12) HeaderBottom.Position = UDim2.new(0, 0, 1, -12) HeaderBottom.BackgroundColor3 = BgHeader HeaderBottom.BorderSizePixel = 0 HeaderBottom.Visible = false
+
+local Header = Instance.new("Frame", MainClip) Header.Size = UDim2.new(1, 0, 0, 45) Header.BackgroundColor3 = BgHeader Header.BackgroundTransparency = 0.12 Header.BorderSizePixel = 0 Instance.new("UICorner", Header).CornerRadius = UDim.new(0, 12)
+local HeaderBottom = Instance.new("Frame", Header) HeaderBottom.Size = UDim2.new(1, 0, 0, 12) HeaderBottom.Position = UDim2.new(0, 0, 1, -12) HeaderBottom.BackgroundColor3 = BgHeader HeaderBottom.BackgroundTransparency = 1 HeaderBottom.BorderSizePixel = 0 HeaderBottom.Visible = false
 local HeaderBottomStroke = Instance.new("Frame", HeaderBottom) HeaderBottomStroke.Size = UDim2.new(1, 0, 0, 1) HeaderBottomStroke.Position = UDim2.new(0, 0, 1, 0) HeaderBottomStroke.BorderSizePixel = 0
 table.insert(ThemeElements.DarkStrokes, HeaderBottomStroke)
 
@@ -766,16 +786,17 @@ local Title = Instance.new("TextLabel", Header)
 Title.Size = UDim2.new(1, 0, 1, 0) Title.Position = UDim2.new(0, 0, 0, 0) Title.BackgroundTransparency = 1 Title.Text = "Essential Recode" Title.TextColor3 = Color3.fromRGB(255, 255, 255) Title.TextSize = 15 Title.Font = Enum.Font.GothamBold Title.TextXAlignment = Enum.TextXAlignment.Center
 local TitleGrad = Instance.new("UIGradient", Title) table.insert(ThemeElements.Gradients, TitleGrad)
 
-local Body = Instance.new("Frame", MainFrame) Body.Size = UDim2.new(1, 0, 1, -45) Body.Position = UDim2.new(0, 0, 0, 45) Body.BackgroundTransparency = 1 Body.Visible = false
+local Body = Instance.new("Frame", MainClip) Body.Size = UDim2.new(1, 0, 1, -45) Body.Position = UDim2.new(0, 0, 0, 45) Body.BackgroundTransparency = 1 Body.Visible = false
 
 local SettingsOverlay = Instance.new("ScrollingFrame", Body)
-SettingsOverlay.Name = "SettingsOverlay" SettingsOverlay.Size = UDim2.new(1, 0, 1, 0) SettingsOverlay.BackgroundTransparency = 1 SettingsOverlay.BorderSizePixel = 0 SettingsOverlay.ScrollBarThickness = 4 SettingsOverlay.Visible = false SettingsOverlay.ZIndex = 2
+SettingsOverlay.Name = "SettingsOverlay" SettingsOverlay.Size = UDim2.new(1, 0, 1, 0) SettingsOverlay.BackgroundTransparency = 1
+SettingsOverlay.ScrollBarImageTransparency = 0.25 SettingsOverlay.BorderSizePixel = 0 SettingsOverlay.ScrollBarThickness = 4 SettingsOverlay.Visible = false SettingsOverlay.ZIndex = 2
 table.insert(ThemeElements.Scrollbars, SettingsOverlay)
 local soLayout = Instance.new("UIListLayout", SettingsOverlay) soLayout.SortOrder = Enum.SortOrder.LayoutOrder soLayout.Padding = UDim.new(0, 10)
 local soPadding = Instance.new("UIPadding", SettingsOverlay) soPadding.PaddingTop = UDim.new(0, 15) soPadding.PaddingLeft = UDim.new(0, 15) soPadding.PaddingRight = UDim.new(0, 15) soPadding.PaddingBottom = UDim.new(0, 15)
 soLayout:GetPropertyChangedSignal("AbsoluteContentSize"):Connect(function() SettingsOverlay.CanvasSize = UDim2.new(0, 0, 0, soLayout.AbsoluteContentSize.Y + 30) end)
 
-local Topbar = Instance.new("Frame", Body) Topbar.Size = UDim2.new(1, 0, 0, 42) Topbar.BackgroundColor3 = BgSidebar Topbar.BorderSizePixel = 0
+local Topbar = Instance.new("Frame", Body) Topbar.Size = UDim2.new(1, 0, 0, 42) Topbar.BackgroundColor3 = BgSidebar Topbar.BackgroundTransparency = 0.30 Topbar.BorderSizePixel = 0
 local ContentArea = Instance.new("Frame", Body) ContentArea.Size = UDim2.new(1, 0, 1, -42) ContentArea.Position = UDim2.new(0, 0, 0, 42) ContentArea.BackgroundTransparency = 1
 
 GearBtn.MouseButton1Click:Connect(function()
@@ -783,6 +804,30 @@ GearBtn.MouseButton1Click:Connect(function()
     ContentArea.Visible = not SettingsOverlay.Visible
     Topbar.Visible = not SettingsOverlay.Visible
 end)
+
+-- User information is compact and belongs to Settings, not the main footer.
+UI_Elements._InitUserCard = function()
+    ContentArea.Size = UDim2.new(1,0,1,-42)
+    SettingsOverlay.Size = UDim2.new(1,0,1,0)
+    local card=Instance.new("Frame",SettingsOverlay) card.Name="UserCard" card.Position=UDim2.new(0,10,1,-58)
+    card.Size=UDim2.new(1,0,0,50) card.LayoutOrder=-100 card.BackgroundTransparency=0.20 card.BackgroundColor3=BgElement card.BorderSizePixel=0
+    Instance.new("UICorner",card).CornerRadius=UDim.new(0,9)
+    local stroke=Instance.new("UIStroke",card) table.insert(ThemeElements.DarkStrokes,stroke)
+    local avatar=Instance.new("ImageLabel",card) avatar.Position=UDim2.fromOffset(6,5) avatar.Size=UDim2.fromOffset(40,40)
+    avatar.BackgroundTransparency=1 Instance.new("UICorner",avatar).CornerRadius=UDim.new(1,0)
+    local name=Instance.new("TextLabel",card) name.Position=UDim2.fromOffset(55,4) name.Size=UDim2.new(1,-65,0,21)
+    name.BackgroundTransparency=1 name.Text=LocalPlayer.DisplayName.." (@"..LocalPlayer.Name..")" name.TextColor3=TextColor
+    name.TextSize=12 name.Font=Enum.Font.GothamBold name.TextXAlignment=Enum.TextXAlignment.Left name.TextTruncate=Enum.TextTruncate.AtEnd
+    local id=Instance.new("TextLabel",card) id.Position=UDim2.fromOffset(55,26) id.Size=UDim2.new(1,-65,0,18)
+    id.BackgroundTransparency=1 id.Text="ID: "..tostring(LocalPlayer.UserId) id.TextSize=10 id.Font=Enum.Font.Gotham id.TextColor3=TextMuted
+    id.TextXAlignment=Enum.TextXAlignment.Left
+    task.spawn(function()
+        local ok,url=pcall(function() return Players:GetUserThumbnailAsync(LocalPlayer.UserId,Enum.ThumbnailType.HeadShot,Enum.ThumbnailSize.Size100x100) end)
+        if ok and avatar.Parent then avatar.Image=url end
+    end)
+end
+UI_Elements._InitUserCard()
+UI_Elements._InitUserCard=nil
 
 local isMenuOpen = false
 
@@ -867,25 +912,34 @@ table.insert(connections, ScreenGui:GetPropertyChangedSignal("AbsoluteSize"):Con
     end
 end))
 
+local mainMenuTween = nil
+local mainMenuRevision = 0
 local function ToggleMenu()
+    mainMenuRevision = mainMenuRevision + 1
+    local revision = mainMenuRevision
+    if mainMenuTween then mainMenuTween:Cancel() mainMenuTween = nil end
     isMenuOpen = not isMenuOpen
     local targetScale = (Settings.DeviceMode == "Phone") and 0.85 or 1.0
     MainUIScale.Scale = targetScale
     if isMenuOpen then
         Title.TextXAlignment = Enum.TextXAlignment.Left Title.Position = UDim2.new(0, 15, 0, 0) Title.Size = UDim2.new(1, -50, 1, 0)
         GearBtn.Visible = true MainFrame.Visible = true Body.Visible = true HeaderBottom.Visible = true
-        TweenService:Create(MainFrame, TweenInfo.new(0.5, Enum.EasingStyle.Exponential, Enum.EasingDirection.Out), {
+        mainMenuTween = TweenService:Create(MainFrame, TweenInfo.new(0.35, Enum.EasingStyle.Exponential, Enum.EasingDirection.Out), {
             Size = UDim2.new(0, 560, 0, 420),
             Position = ComputeOpenMenuPosition()
-        }):Play()
+        })
+        mainMenuTween:Play()
     else
         Title.TextXAlignment = Enum.TextXAlignment.Center Title.Position = UDim2.new(0, 0, 0, 0) Title.Size = UDim2.new(1, 0, 1, 0)
-        GearBtn.Visible = false SettingsOverlay.Visible = false ContentArea.Visible = true Topbar.Visible = true
-        TweenService:Create(MainFrame, TweenInfo.new(0.4, Enum.EasingStyle.Exponential, Enum.EasingDirection.Out), {
+        GearBtn.Visible = false
+        mainMenuTween = TweenService:Create(MainFrame, TweenInfo.new(0.3, Enum.EasingStyle.Exponential, Enum.EasingDirection.Out), {
             Size = UDim2.new(0, 200, 0, 45),
             Position = ComputePillPosition(Settings.PillPosition)
-        }):Play()
-        task.delay(0.2, function() if not isMenuOpen then Body.Visible = false HeaderBottom.Visible = false end end)
+        })
+        mainMenuTween:Play()
+        task.delay(0.3, function()
+            if revision == mainMenuRevision and not isMenuOpen then Body.Visible = false HeaderBottom.Visible = false end
+        end)
     end
 end
 
@@ -1173,6 +1227,9 @@ local function CreateTab(name)
     local grad = Instance.new("UIGradient", bgFrame) table.insert(ThemeElements.Gradients, grad) grad.Enabled = false
     local lbl = Instance.new("TextLabel", btn) lbl.Size = UDim2.new(1, 0, 1, 0) lbl.BackgroundTransparency = 1 lbl.Text = name lbl.TextColor3 = TextMuted lbl.TextSize = 13 lbl.Font = Enum.Font.GothamBold lbl.ZIndex = 2
     local page = Instance.new("ScrollingFrame", ContentArea) page.Name = name .. "Page" page.Size = UDim2.new(1, 0, 1, 0) page.BackgroundTransparency = 1 page.ScrollBarThickness = 4 page.BorderSizePixel = 0 page.Visible = false
+    local cardPadding=Instance.new("UIPadding",page)
+    cardPadding.PaddingLeft=UDim.new(0,2) cardPadding.PaddingRight=UDim.new(0,6)
+    cardPadding.PaddingTop=UDim.new(0,2) cardPadding.PaddingBottom=UDim.new(0,2)
     table.insert(ThemeElements.Scrollbars, page)
     local layout = Instance.new("UIListLayout", page) layout.SortOrder = Enum.SortOrder.LayoutOrder layout.Padding = UDim.new(0, 10)
     layout:GetPropertyChangedSignal("AbsoluteContentSize"):Connect(function() page.CanvasSize = UDim2.new(0, 0, 0, layout.AbsoluteContentSize.Y + 10) end)
@@ -1187,8 +1244,9 @@ local function CreateTab(name)
 end
 
 local function CreateToggle(parent, text, default, callback)
-    local frame = Instance.new("Frame", parent) frame.Size = UDim2.new(1, 0, 0, 42) frame.BackgroundColor3 = BgElement Instance.new("UICorner", frame).CornerRadius = UDim.new(0, 8)
-    local stroke = Instance.new("UIStroke", frame) stroke.Thickness = 1 table.insert(ThemeElements.DarkStrokes, stroke)
+    local frame = Instance.new("CanvasGroup", parent) frame.Size = UDim2.new(1, 0, 0, 42) frame.BackgroundColor3 = BgElement frame.BackgroundTransparency = 0.20 Instance.new("UICorner", frame).CornerRadius = UDim.new(0, 8)
+    if text == "No Stop Emote" then frame.LayoutOrder = 100000 end
+    local stroke = Instance.new("UIStroke", frame) stroke.ApplyStrokeMode = Enum.ApplyStrokeMode.Border stroke.LineJoinMode = Enum.LineJoinMode.Round stroke.Thickness = 1 stroke.Thickness = 1 table.insert(ThemeElements.DarkStrokes, stroke)
     local label = Instance.new("TextLabel", frame) label.Size = UDim2.new(1, -70, 1, 0) label.Position = UDim2.new(0, 12, 0, 0) label.BackgroundTransparency = 1 label.Text = text label.TextColor3 = TextColor label.TextSize = 13 label.Font = Enum.Font.GothamSemibold label.TextXAlignment = Enum.TextXAlignment.Left
     local btn = Instance.new("TextButton", frame) btn.Size = UDim2.new(0, 40, 0, 20) btn.Position = UDim2.new(1, -52, 0.5, -10) btn.BackgroundColor3 = Color3.fromRGB(255, 255, 255) btn.Text = "" Instance.new("UICorner", btn).CornerRadius = UDim.new(1, 0)
     local grad = Instance.new("UIGradient", btn) table.insert(ThemeElements.Gradients, grad) grad.Enabled = default
@@ -1206,8 +1264,8 @@ local function CreateToggle(parent, text, default, callback)
 end
 
 local function CreateSlider(parent, text, min, max, default, callback)
-    local frame = Instance.new("Frame", parent) frame.Size = UDim2.new(1, 0, 0, 54) frame.BackgroundColor3 = BgElement Instance.new("UICorner", frame).CornerRadius = UDim.new(0, 8)
-    local stroke = Instance.new("UIStroke", frame) stroke.Thickness = 1 table.insert(ThemeElements.DarkStrokes, stroke)
+    local frame = Instance.new("CanvasGroup", parent) frame.Size = UDim2.new(1, 0, 0, 54) frame.BackgroundColor3 = BgElement frame.BackgroundTransparency = 0.20 Instance.new("UICorner", frame).CornerRadius = UDim.new(0, 8)
+    local stroke = Instance.new("UIStroke", frame) stroke.ApplyStrokeMode = Enum.ApplyStrokeMode.Border stroke.LineJoinMode = Enum.LineJoinMode.Round stroke.Thickness = 1 stroke.Thickness = 1 table.insert(ThemeElements.DarkStrokes, stroke)
     local label = Instance.new("TextLabel", frame) label.Size = UDim2.new(1, -20, 0, 24) label.Position = UDim2.new(0, 12, 0, 5) label.BackgroundTransparency = 1 label.Text = text label.TextColor3 = TextColor label.TextSize = 13 label.Font = Enum.Font.GothamSemibold label.TextXAlignment = Enum.TextXAlignment.Left
     local valLabel = Instance.new("TextLabel", frame) valLabel.Size = UDim2.new(0, 38, 0, 18) valLabel.Position = UDim2.new(1, -50, 0, 8) valLabel.BackgroundColor3 = BgDark valLabel.Text = tostring(default) valLabel.TextSize = 11 valLabel.Font = Enum.Font.GothamBold Instance.new("UICorner", valLabel).CornerRadius = UDim.new(0, 4)
     table.insert(ThemeElements.Texts, valLabel)
@@ -1253,7 +1311,7 @@ local function CreateButton(parent, text, isAccent, callback)
 end
 
 local function CreateKeybind(parent, text, defaultKey, callback)
-    local frame = Instance.new("Frame", parent) frame.Size = UDim2.new(1, 0, 0, 42) frame.BackgroundColor3 = BgElement Instance.new("UICorner", frame).CornerRadius = UDim.new(0, 8)
+    local frame = Instance.new("Frame", parent) frame.Size = UDim2.new(1, 0, 0, 42) frame.BackgroundColor3 = BgElement frame.BackgroundTransparency = 0.20 Instance.new("UICorner", frame).CornerRadius = UDim.new(0, 8)
     local stroke = Instance.new("UIStroke", frame) stroke.Thickness = 1 table.insert(ThemeElements.DarkStrokes, stroke)
     local label = Instance.new("TextLabel", frame) label.Size = UDim2.new(1, -140, 1, 0) label.Position = UDim2.new(0, 12, 0, 0) label.BackgroundTransparency = 1 label.Text = text label.TextColor3 = TextColor label.TextSize = 13 label.Font = Enum.Font.GothamSemibold label.TextXAlignment = Enum.TextXAlignment.Left
     local keyBtn = Instance.new("TextButton", frame) keyBtn.Size = UDim2.new(0, 118, 0, 26) keyBtn.Position = UDim2.new(1, -130, 0.5, -13) keyBtn.BackgroundColor3 = BgDark keyBtn.Text = tostring(defaultKey) keyBtn.TextSize = 12 keyBtn.Font = Enum.Font.GothamBold Instance.new("UICorner", keyBtn).CornerRadius = UDim.new(0, 6)
@@ -1293,8 +1351,8 @@ local function CreateKeybind(parent, text, defaultKey, callback)
 end
 
 local function CreateInput(parent, placeholder, callback)
-    local frame = Instance.new("Frame", parent) frame.Size = UDim2.new(1, 0, 0, 42) frame.BackgroundColor3 = BgElement Instance.new("UICorner", frame).CornerRadius = UDim.new(0, 8)
-    local stroke = Instance.new("UIStroke", frame) table.insert(ThemeElements.DarkStrokes, stroke)
+    local frame = Instance.new("CanvasGroup", parent) frame.Size = UDim2.new(1, 0, 0, 42) frame.BackgroundColor3 = BgElement frame.BackgroundTransparency = 0.20 Instance.new("UICorner", frame).CornerRadius = UDim.new(0, 8)
+    local stroke = Instance.new("UIStroke", frame) stroke.ApplyStrokeMode = Enum.ApplyStrokeMode.Border stroke.LineJoinMode = Enum.LineJoinMode.Round stroke.Thickness = 1 table.insert(ThemeElements.DarkStrokes, stroke)
     local box = Instance.new("TextBox", frame) box.Size = UDim2.new(1, -24, 1, 0) box.Position = UDim2.new(0, 12, 0, 0) box.BackgroundTransparency = 1 box.Text = "" box.PlaceholderText = placeholder box.TextColor3 = TextColor box.PlaceholderColor3 = TextMuted box.TextSize = 13 box.Font = Enum.Font.Gotham box.TextXAlignment = Enum.TextXAlignment.Left box.ClearTextOnFocus = false
     UI_Elements._Search.Register(parent, frame, placeholder)
     box.FocusLost:Connect(function() callback(box.Text) end) return function(txt) box.Text = txt callback(txt) end
@@ -1305,8 +1363,8 @@ local function CreateLabel(parent, defaultText)
 end
 
 local function CreateDropdownSection(parent, titleText)
-    local mainFrame = Instance.new("Frame", parent) mainFrame.Size = UDim2.new(1, 0, 0, 42) mainFrame.BackgroundColor3 = BgElement mainFrame.ClipsDescendants = true mainFrame.BorderSizePixel = 0 Instance.new("UICorner", mainFrame).CornerRadius = UDim.new(0, 8)
-    local stroke = Instance.new("UIStroke", mainFrame) table.insert(ThemeElements.DarkStrokes, stroke)
+    local mainFrame = Instance.new("CanvasGroup", parent) mainFrame.Size = UDim2.new(1, 0, 0, 42) mainFrame.BackgroundColor3 = BgElement mainFrame.BackgroundTransparency = 0.20 mainFrame.ClipsDescendants = true mainFrame.BorderSizePixel = 0 Instance.new("UICorner", mainFrame).CornerRadius = UDim.new(0, 8)
+    local stroke = Instance.new("UIStroke", mainFrame) stroke.ApplyStrokeMode = Enum.ApplyStrokeMode.Border stroke.LineJoinMode = Enum.LineJoinMode.Round stroke.Thickness = 1 table.insert(ThemeElements.DarkStrokes, stroke)
     local triggerBtn = Instance.new("TextButton", mainFrame) triggerBtn.Size = UDim2.new(1, 0, 0, 42) triggerBtn.BackgroundTransparency = 1 triggerBtn.Text = ""
     local label = Instance.new("TextLabel", mainFrame) label.Size = UDim2.new(1, -60, 0, 42) label.Position = UDim2.new(0, 12, 0, 0) label.BackgroundTransparency = 1 label.Text = titleText label.TextColor3 = Color3.fromRGB(255, 255, 255) label.TextSize = 13 label.Font = Enum.Font.GothamBold label.TextXAlignment = Enum.TextXAlignment.Left
     local arrow = Instance.new("TextLabel", mainFrame) arrow.Size = UDim2.new(0, 40, 0, 42) arrow.Position = UDim2.new(1, -45, 0, 0) arrow.BackgroundTransparency = 1 arrow.Text = "▼" arrow.TextColor3 = TextColor arrow.TextSize = 18 arrow.Font = Enum.Font.GothamBold
@@ -1332,8 +1390,8 @@ local function CreateDropdownSection(parent, titleText)
 end
 
 local function CreateDropdown(parent, text, options, default, callback)
-    local frame = Instance.new("Frame", parent) frame.Size = UDim2.new(1, 0, 0, 42) frame.BackgroundColor3 = BgElement frame.ClipsDescendants = true Instance.new("UICorner", frame).CornerRadius = UDim.new(0, 8)
-    local stroke = Instance.new("UIStroke", frame) table.insert(ThemeElements.DarkStrokes, stroke)
+    local frame = Instance.new("CanvasGroup", parent) frame.Size = UDim2.new(1, 0, 0, 42) frame.BackgroundColor3 = BgElement frame.BackgroundTransparency = 0.20 frame.ClipsDescendants = true Instance.new("UICorner", frame).CornerRadius = UDim.new(0, 8)
+    local stroke = Instance.new("UIStroke", frame) stroke.ApplyStrokeMode = Enum.ApplyStrokeMode.Border stroke.LineJoinMode = Enum.LineJoinMode.Round stroke.Thickness = 1 table.insert(ThemeElements.DarkStrokes, stroke)
     local label = Instance.new("TextLabel", frame) label.Size = UDim2.new(0.5, 0, 0, 42) label.Position = UDim2.new(0, 12, 0, 0) label.BackgroundTransparency = 1 label.Text = text label.TextColor3 = TextColor label.TextSize = 13 label.Font = Enum.Font.GothamSemibold label.TextXAlignment = Enum.TextXAlignment.Left
     local selector = Instance.new("TextButton", frame) selector.Size = UDim2.new(0, 130, 0, 26) selector.Position = UDim2.new(1, -142, 0, 8) selector.BackgroundColor3 = BgDark selector.Text = "   " .. tostring(default) selector.TextSize = 12 selector.Font = Enum.Font.GothamBold selector.TextXAlignment = Enum.TextXAlignment.Left Instance.new("UICorner", selector).CornerRadius = UDim.new(0, 6)
     table.insert(ThemeElements.Texts, selector)
@@ -1348,8 +1406,10 @@ local function CreateDropdown(parent, text, options, default, callback)
     end
     for _, opt in ipairs(options) do
         local optBtn = Instance.new("TextButton", optionHolder) optBtn.Size = UDim2.new(1, 0, 0, 26) optBtn.BackgroundColor3 = BgDark optBtn.Text = tostring(opt) optBtn.TextColor3 = TextColor optBtn.TextSize = 12 optBtn.Font = Enum.Font.Gotham Instance.new("UICorner", optBtn).CornerRadius = UDim.new(0, 4)
-        optBtn.MouseEnter:Connect(function() TweenService:Create(optBtn, TweenInfo.new(0.15), {BackgroundColor3 = Color3.fromRGB(60, 30, 90)}):Play() end)
-        optBtn.MouseLeave:Connect(function() TweenService:Create(optBtn, TweenInfo.new(0.15), {BackgroundColor3 = BgDark}):Play() end)
+        ThemeElements.HoverButtons = ThemeElements.HoverButtons or setmetatable({}, {__mode="k"})
+        ThemeElements.HoverButtons[optBtn] = true
+        optBtn.MouseEnter:Connect(function() optBtn:SetAttribute("EssentialHovered", true) TweenService:Create(optBtn, TweenInfo.new(0.15), {BackgroundColor3 = Color3.fromRGB(Settings.AccentR, Settings.AccentG, Settings.AccentB):Lerp(BgDark, 0.65)}):Play() end)
+        optBtn.MouseLeave:Connect(function() optBtn:SetAttribute("EssentialHovered", false) TweenService:Create(optBtn, TweenInfo.new(0.15), {BackgroundColor3 = BgDark}):Play() end)
         optBtn.MouseButton1Click:Connect(function() setValue(opt) isOpen = false arrow.Text = "▼" TweenService:Create(frame, TweenInfo.new(0.25, Enum.EasingStyle.Exponential, Enum.EasingDirection.Out), {Size = UDim2.new(1, 0, 0, 42)}):Play() end)
     end
     selector.MouseButton1Click:Connect(function() isOpen = not isOpen arrow.Text = isOpen and "▲" or "▼" local targetH = isOpen and (42 + optLayout.AbsoluteContentSize.Y + 8) or 42 TweenService:Create(frame, TweenInfo.new(0.25, Enum.EasingStyle.Exponential, Enum.EasingDirection.Out), {Size = UDim2.new(1, 0, 0, targetH)}):Play() end)
@@ -1470,6 +1530,55 @@ end
 -- ==============================================
 -- SETTINGS OVERLAY
 -- ==============================================
+-- Fixed project background; no player-editable image.
+UI_Elements._InitBackground = function()
+    local backdrop=Instance.new("Frame",MainClip)
+    backdrop.Name="BackgroundSurface" backdrop.Size=UDim2.fromScale(1,1) backdrop.BackgroundTransparency=1 backdrop.ZIndex=0
+    local matte=Instance.new("Frame",backdrop) matte.Size=UDim2.fromScale(1,1) matte.BackgroundColor3=Color3.new(1,1,1) matte.BorderSizePixel=0 matte.ZIndex=0
+    local layer=Instance.new("ImageLabel",backdrop) layer.Name="EssentialBackground"
+    layer.Size=UDim2.fromScale(1,1) layer.BackgroundTransparency=1 layer.ScaleType=Enum.ScaleType.Fit layer.ZIndex=1
+    layer.AnchorPoint=Vector2.new(0.5,0.5) layer.Position=UDim2.fromScale(0.5,0.5)
+    layer.ImageTransparency=0.60
+    local shade=Instance.new("Frame",backdrop) shade.Name="BackgroundShade" shade.Size=UDim2.fromScale(1,1)
+    shade.BackgroundColor3=Color3.fromRGB(15,12,23) shade.BackgroundTransparency=0.40 shade.BorderSizePixel=0 shade.ZIndex=2
+    local fallback=Instance.new("UIGradient",matte) fallback.Rotation=70
+    fallback.Color=ColorSequence.new({ColorSequenceKeypoint.new(0,Color3.fromRGB(32,22,46)),ColorSequenceKeypoint.new(0.55,Color3.fromRGB(22,17,33)),ColorSequenceKeypoint.new(1,Color3.fromRGB(15,12,23))})
+    -- A light neutral base allows the fallback gradient to be visible.
+    MainClip.BackgroundColor3=BgMain
+    local closed=false
+    -- No remote Lua is fetched or executed. Only JPEG image bytes are accepted.
+    local imageUrl="https://media.istockphoto.com/id/2236602253/ru/видео/бесшовная-зацикленная-3d-анимация-светящихся-фиолетово-голубых-стеклянных-волн.jpg?s=640x640&k=20&c=sjlHuoYKQvgRsUKimv0h_X4rltWhusyI0mL9kO374rw="
+    local function encodePath(url)
+        return (url:gsub("[^%w%-%._~:/?=&]",function(c) return string.format("%%%02X",string.byte(c)) end))
+    end
+    task.spawn(function()
+        local assetFn=getcustomasset or getsynasset
+        if type(assetFn)~="function" or type(writefile)~="function" then
+            return
+        end
+        local ok,result=pcall(function()
+            local filename="Essential-Background-2236602253.jpg"
+            local exists=type(isfile)=="function" and isfile(filename)
+            if not exists then
+                local bytes=game:HttpGet(encodePath(imageUrl))
+                assert(type(bytes)=="string" and #bytes>3 and #bytes<12000000 and bytes:sub(1,3)==string.char(255,216,255),"Expected JPEG data")
+                if closed then return nil end
+                writefile(filename,bytes)
+            end
+            return assetFn(filename)
+        end)
+        if closed or not layer.Parent then return end
+        if ok and result then
+            layer.Image=result
+        else
+            warn("[Essential background] "..tostring(result))
+        end
+    end)
+    UI_Elements._CleanupBackground=function() closed=true end
+end
+UI_Elements._InitBackground()
+UI_Elements._InitBackground=nil
+
 CreateLabel(SettingsOverlay, "UI Customization")
 UI_Elements.keybindMenu = CreateKeybind(SettingsOverlay, "Menu Keybind", Settings.MenuKeybind, function(keyName)
     Settings.MenuKeybind = keyName
@@ -1572,13 +1681,7 @@ UI_Elements.sliderFlashB = CreateSlider(flashDropdown, "Color: Blue (B)", 0, 255
 local fogDropdown = CreateDropdownSection(VisualPage, "Custom Fog")
 UI_Elements.toggleFog = CreateToggle(fogDropdown, "Enable Custom Fog", false, function(state)
     Settings.CustomFog = state
-    if not state then
-        Lighting.FogStart = DefaultLighting.FogStart Lighting.FogEnd = DefaultLighting.FogEnd
-        if not Settings.SkyEnabled then Lighting.FogColor = DefaultLighting.FogColor
-            local defaultAtmo = Lighting:FindFirstChildWhichIsA("Atmosphere")
-            if not defaultAtmo and DefaultAtmosphere and DefaultAtmosphere.Parent == nil then DefaultAtmosphere.Parent = Lighting end
-        else Lighting.FogColor = Color3.fromRGB(Settings.HorR, Settings.HorG, Settings.HorB) end
-    end
+    if UI_Elements._ApplyEnvironment then UI_Elements._ApplyEnvironment() end
 end)
 UI_Elements.sliderFogStart = CreateSlider(fogDropdown, "Fog Start", 0, 2000, 0, function(val) Settings.FogStart = val end)
 UI_Elements.sliderFogEnd = CreateSlider(fogDropdown, "Fog End", 10, 5000, 1000, function(val) Settings.FogEnd = val end)
@@ -1589,197 +1692,129 @@ UI_Elements.sliderFogB = CreateSlider(fogDropdown, "Color: Blue (B)", 0, 255, 15
 local SkyboxState, EnforceSkybox, ResetSkybox
 UI_Elements._InitSkybox = function()
 local skyboxDropdown = CreateDropdownSection(VisualPage, "Custom Skybox")
-SkyboxState = {
-    RemovedAtmospheres = {},
-    RemovedSkies = {},
-    OrigSkyTextures = nil,
-    CustomSky = nil,
-    CustomAtmosphere = nil,
-    CustomSkyCC = nil,
-    ChildAddedConn = nil,
-    ApplyingPreset = false
-}
-
-local function CaptureOriginalSkyTextures(skyObj)
-    if SkyboxState.OrigSkyTextures or not skyObj then return end
-    SkyboxState.OrigSkyTextures = {
-        Bk = skyObj.SkyboxBk, Dn = skyObj.SkyboxDn, Ft = skyObj.SkyboxFt,
-        Lf = skyObj.SkyboxLf, Rt = skyObj.SkyboxRt, Up = skyObj.SkyboxUp,
-        Sun = skyObj.SunTextureId, Moon = skyObj.MoonTextureId
-    }
+SkyboxState = { ApplyingPreset = false, owned = {}, hidden = {}, effects = {}, props = {}, applying = false, stopped = false }
+local E = SkyboxState
+local function own(key, class, name)
+    local obj = E.owned[key]
+    if obj and not obj.Parent then
+        local ok = pcall(function() obj.Parent = Lighting end)
+        if not ok then obj = nil end
+    end
+    if not obj then obj = Instance.new(class) obj.Name = name obj.Parent = Lighting E.owned[key] = obj end
+    return obj
 end
-
-local function EnsureCustomSky()
-    local foundCustom, foundAtmo, foundCC = nil, nil, nil
-    for _, obj in ipairs(Lighting:GetChildren()) do
-        if obj:IsA("Sky") then
-            if obj.Name == "EssentialCustomSky" then
-                foundCustom = obj
-            else
-                CaptureOriginalSkyTextures(obj)
-                if not table.find(SkyboxState.RemovedSkies, obj) then
-                    table.insert(SkyboxState.RemovedSkies, obj)
-                end
-                pcall(function() obj.Parent = nil end)
-            end
-        elseif obj:IsA("Atmosphere") then
-            if obj.Name == "EssentialCustomAtmosphere" then
-                foundAtmo = obj
-            else
-                if not table.find(SkyboxState.RemovedAtmospheres, obj) then
-                    table.insert(SkyboxState.RemovedAtmospheres, obj)
-                end
-                pcall(function() obj.Parent = nil end)
-            end
-        elseif obj:IsA("ColorCorrectionEffect") and obj.Name == "EssentialSkyCC" then
-            foundCC = obj
-        end
-    end
-
-    if not foundCustom or foundCustom.Parent ~= Lighting then
-        local ns = SkyboxState.CustomSky or Instance.new("Sky")
-        ns.Name = "EssentialCustomSky"
-        -- Используем валидные 3D-грани исходного неба (или встроенную кубмапу Roblox), чтобы купол неба не смещался при наклоне камеры
-        if SkyboxState.OrigSkyTextures then
-            local t = SkyboxState.OrigSkyTextures
-            ns.SkyboxBk = t.Bk ns.SkyboxDn = t.Dn ns.SkyboxFt = t.Ft
-            ns.SkyboxLf = t.Lf ns.SkyboxRt = t.Rt ns.SkyboxUp = t.Up
-            ns.SunTextureId = t.Sun ns.MoonTextureId = t.Moon
-        end
-        pcall(function() ns.Parent = Lighting end)
-        SkyboxState.CustomSky = ns
-        foundCustom = ns
-    else
-        SkyboxState.CustomSky = foundCustom
-    end
-
-    if not foundAtmo or foundAtmo.Parent ~= Lighting then
-        local na = SkyboxState.CustomAtmosphere or Instance.new("Atmosphere")
-        na.Name = "EssentialCustomAtmosphere"
-        pcall(function() na.Parent = Lighting end)
-        SkyboxState.CustomAtmosphere = na
-        foundAtmo = na
-    else
-        SkyboxState.CustomAtmosphere = foundAtmo
-    end
-
-    if not foundCC or foundCC.Parent ~= Lighting then
-        local ncc = SkyboxState.CustomSkyCC or Instance.new("ColorCorrectionEffect")
-        ncc.Name = "EssentialSkyCC"
-        pcall(function() ncc.Parent = Lighting end)
-        SkyboxState.CustomSkyCC = ncc
-        foundCC = ncc
-    else
-        SkyboxState.CustomSkyCC = foundCC
-    end
-
-    return foundCustom, foundAtmo, foundCC
+local function drop(key)
+    local obj = E.owned[key]
+    E.owned[key] = nil
+    if obj then pcall(function() obj:Destroy() end) end
 end
-
-EnforceSkybox = function()
-    if not Settings.SkyEnabled then return end
-    local sky, atmo, cc = EnsureCustomSky()
-    local skyCol = Color3.fromRGB(Settings.SkyR, Settings.SkyG, Settings.SkyB)
-    local horCol = Color3.fromRGB(Settings.HorR, Settings.HorG, Settings.HorB)
-    local ambCol = Color3.fromRGB(
-        math.clamp(math.floor(Settings.SkyR * 0.45 + Settings.HorR * 0.2), 0, 255),
-        math.clamp(math.floor(Settings.SkyG * 0.45 + Settings.HorG * 0.2), 0, 255),
-        math.clamp(math.floor(Settings.SkyB * 0.45 + Settings.HorB * 0.2), 0, 255)
-    )
-    pcall(function()
-        if sky then
-            if sky.StarCount ~= SkySettings.StarCount then sky.StarCount = SkySettings.StarCount end
-            if sky.SunAngularSize ~= SkySettings.SunAngularSize then sky.SunAngularSize = SkySettings.SunAngularSize end
-            if sky.MoonAngularSize ~= SkySettings.MoonAngularSize then sky.MoonAngularSize = SkySettings.MoonAngularSize end
-            if sky.CelestialBodiesShown ~= SkySettings.CelestialBodiesShown then sky.CelestialBodiesShown = SkySettings.CelestialBodiesShown end
-            pcall(function() sky.SkyboxOrientation = Vector3.zero end)
-        end
-        if atmo then
-            -- Полное покрытие сферического купола (Haze = 10, Offset = 0, Glare = 0) предотвращает смещение цвета при взгляде вверх/вниз
-            if atmo.Density ~= 0.35 then atmo.Density = 0.35 end
-            if atmo.Offset ~= 0 then atmo.Offset = 0 end
-            if atmo.Haze ~= 10 then atmo.Haze = 10 end
-            if atmo.Glare ~= 0 then atmo.Glare = 0 end
-            if atmo.Color ~= skyCol then atmo.Color = skyCol end
-            if atmo.Decay ~= horCol then atmo.Decay = horCol end
-        end
-        if cc then
-            if not cc.Enabled then cc.Enabled = true end
-            local targetTint = skyCol:Lerp(Color3.fromRGB(255, 255, 255), 0.65)
-            local targetBright = (Settings.SkyBright - 50) / 250
-            if cc.TintColor ~= targetTint then cc.TintColor = targetTint end
-            if math.abs(cc.Brightness - targetBright) > 0.001 then cc.Brightness = targetBright end
-            if cc.Contrast ~= 0.05 then cc.Contrast = 0.05 end
-            if cc.Saturation ~= 0.1 then cc.Saturation = 0.1 end
-        end
-
-        local targetBrightness = (Settings.SkyBright / 100) * 6
-        local targetExposure = (Settings.SkyExp / 100) * 2 - 1
-        if math.abs(Lighting.Brightness - targetBrightness) > 0.001 then Lighting.Brightness = targetBrightness end
-        if math.abs(Lighting.ExposureCompensation - targetExposure) > 0.001 then Lighting.ExposureCompensation = targetExposure end
-        if Lighting.ColorShift_Top ~= skyCol then Lighting.ColorShift_Top = skyCol end
-        if Lighting.ColorShift_Bottom ~= horCol then Lighting.ColorShift_Bottom = horCol end
-        if Lighting.OutdoorAmbient ~= horCol then Lighting.OutdoorAmbient = horCol end
-        if Lighting.Ambient ~= ambCol then Lighting.Ambient = ambCol end
-        if math.abs(Lighting.ClockTime - Settings.SkyClock) > 0.001 then Lighting.ClockTime = Settings.SkyClock end
-        if not Settings.CustomFog then
-            if Lighting.FogColor ~= horCol then Lighting.FogColor = horCol end
-            if Lighting.FogStart ~= 50000 then Lighting.FogStart = 50000 end
-            if Lighting.FogEnd ~= 100000 then Lighting.FogEnd = 100000 end
-        end
-    end)
+local function assign(key, value)
+    local current = Lighting[key]
+    local rec = E.props[key]
+    if not rec then rec = {base = current} E.props[key] = rec
+    elseif current ~= rec.applied then rec.base = current end
+    if current ~= value then Lighting[key] = value end
+    rec.applied = value
 end
-
-local function EnableSkyboxListeners()
-    if SkyboxState.ChildAddedConn then return end
-    SkyboxState.ChildAddedConn = Lighting.ChildAdded:Connect(function(child)
-        if not Settings.SkyEnabled then return end
-        if (child:IsA("Sky") and child.Name ~= "EssentialCustomSky")
-            or (child:IsA("Atmosphere") and child.Name ~= "EssentialCustomAtmosphere") then
-            task.defer(EnforceSkybox)
-        end
-    end)
+local function release(key)
+    local rec = E.props[key]
+    if not rec then return end
+    if Lighting[key] == rec.applied then Lighting[key] = rec.base end
+    E.props[key] = nil
 end
-
-ResetSkybox = function()
-    if SkyboxState.ChildAddedConn then
-        pcall(function() SkyboxState.ChildAddedConn:Disconnect() end)
-        SkyboxState.ChildAddedConn = nil
-    end
-    pcall(function()
-        if SkyboxState.CustomSky then pcall(function() SkyboxState.CustomSky:Destroy() end) SkyboxState.CustomSky = nil end
-        if SkyboxState.CustomAtmosphere then pcall(function() SkyboxState.CustomAtmosphere:Destroy() end) SkyboxState.CustomAtmosphere = nil end
-        if SkyboxState.CustomSkyCC then pcall(function() SkyboxState.CustomSkyCC:Destroy() end) SkyboxState.CustomSkyCC = nil end
+local skyProps = {"Brightness", "ExposureCompensation", "Ambient", "OutdoorAmbient", "ColorShift_Top", "ColorShift_Bottom", "ClockTime", "EnvironmentDiffuseScale", "EnvironmentSpecularScale"}
+local fogProps = {"FogColor", "FogStart", "FogEnd"}
+local function apply()
+    if E.applying then return end
+    E.applying = true
+    local ok, err = pcall(function()
+        local sky = Settings.SkyEnabled and not E.stopped
+        local fog = Settings.CustomFog and not E.stopped
+        -- Keep ownership records even when the other module is toggled off.
         for _, obj in ipairs(Lighting:GetChildren()) do
-            if (obj:IsA("Sky") and obj.Name == "EssentialCustomSky")
-                or (obj:IsA("Atmosphere") and obj.Name == "EssentialCustomAtmosphere")
-                or (obj:IsA("ColorCorrectionEffect") and obj.Name == "EssentialSkyCC") then
-                pcall(function() obj:Destroy() end)
+            local hide = (obj:IsA("Atmosphere") and (sky or fog) and obj ~= E.owned.atmo)
+                or (obj:IsA("Sky") and sky and obj ~= E.owned.sky)
+            if hide then E.hidden[obj] = true obj.Parent = nil end
+            if obj:IsA("PostEffect") and obj ~= E.owned.cc and sky then
+                if E.effects[obj] == nil then E.effects[obj] = obj.Enabled end
+                if obj.Enabled then obj.Enabled = false end
             end
         end
-        for _, sk in ipairs(SkyboxState.RemovedSkies) do
-            pcall(function() if sk and sk.Parent == nil then sk.Parent = Lighting end end)
+        for obj in pairs(E.hidden) do
+            local stillHide = (obj:IsA("Atmosphere") and (sky or fog)) or (obj:IsA("Sky") and sky)
+            if not stillHide then
+                if obj.Parent == nil then pcall(function() obj.Parent = Lighting end) end
+                E.hidden[obj] = nil
+            end
         end
-        for _, atmo in ipairs(SkyboxState.RemovedAtmospheres) do
-            pcall(function() if atmo and atmo.Parent == nil then atmo.Parent = Lighting end end)
+        if sky then
+            local sk = own("sky", "Sky", "EssentialCustomSky")
+            -- Fixed built-in sky asset, not the current map's textures.
+            sk.SkyboxBk = "rbxasset://textures/sky/sky512_bk.tex"
+            sk.SkyboxDn = "rbxasset://textures/sky/sky512_dn.tex"
+            sk.SkyboxFt = "rbxasset://textures/sky/sky512_ft.tex"
+            sk.SkyboxLf = "rbxasset://textures/sky/sky512_lf.tex"
+            sk.SkyboxRt = "rbxasset://textures/sky/sky512_rt.tex"
+            sk.SkyboxUp = "rbxasset://textures/sky/sky512_up.tex"
+            sk.StarCount = SkySettings.StarCount
+            sk.SunAngularSize = SkySettings.SunAngularSize sk.MoonAngularSize = SkySettings.MoonAngularSize
+            sk.CelestialBodiesShown = SkySettings.CelestialBodiesShown
+            local skyCol = Color3.fromRGB(Settings.SkyR, Settings.SkyG, Settings.SkyB)
+            local horCol = Color3.fromRGB(Settings.HorR, Settings.HorG, Settings.HorB)
+            assign("Brightness", Settings.SkyBright / 100 * 6)
+            assign("ExposureCompensation", Settings.SkyExp / 100 * 2 - 1)
+            assign("ClockTime", Settings.SkyClock)
+            assign("Ambient", skyCol:Lerp(horCol, 0.3):Lerp(Color3.new(0,0,0), 0.45))
+            assign("OutdoorAmbient", horCol)
+            assign("ColorShift_Top", skyCol) assign("ColorShift_Bottom", horCol)
+            assign("EnvironmentDiffuseScale", 0.5) assign("EnvironmentSpecularScale", 0.5)
+            local cc = own("cc", "ColorCorrectionEffect", "EssentialSkyCC")
+            cc.Enabled = true cc.TintColor = skyCol:Lerp(Color3.new(1,1,1), 0.65)
+            cc.Brightness = (Settings.SkyBright - 50) / 250 cc.Contrast = 0.05 cc.Saturation = 0.1
+            if not fog then
+                local at = own("atmo", "Atmosphere", "EssentialCustomAtmosphere")
+                at.Density = 0.35 at.Offset = 0 at.Haze = 10 at.Glare = 0
+                at.Color = skyCol at.Decay = horCol
+            else drop("atmo") end
+        else
+            drop("sky") drop("atmo") drop("cc")
+            for _, key in ipairs(skyProps) do release(key) end
+            for obj, enabled in pairs(E.effects) do
+                pcall(function() if obj.Enabled == false then obj.Enabled = enabled end end)
+                E.effects[obj] = nil
+            end
         end
-        if DefaultAtmosphere and DefaultAtmosphere.Parent == nil then
-            pcall(function() DefaultAtmosphere.Parent = Lighting end)
-        end
-        Lighting.Brightness = DefaultLighting.Brightness
-        Lighting.ExposureCompensation = DefaultLighting.ExposureCompensation
-        Lighting.Ambient = DefaultLighting.Ambient
-        Lighting.OutdoorAmbient = DefaultLighting.OutdoorAmbient
-        Lighting.ColorShift_Top = DefaultLighting.ColorShift_Top
-        Lighting.ColorShift_Bottom = DefaultLighting.ColorShift_Bottom
-        Lighting.ClockTime = DefaultLighting.ClockTime
-        if not Settings.CustomFog then
-            Lighting.FogColor = DefaultLighting.FogColor
-            Lighting.FogStart = DefaultLighting.FogStart
-            Lighting.FogEnd = DefaultLighting.FogEnd
+        -- Fog has explicit priority over atmospheric haze, not over the sky or its lighting.
+        if fog then
+            assign("FogColor", Color3.fromRGB(Settings.FogR, Settings.FogG, Settings.FogB))
+            assign("FogStart", Settings.FogStart)
+            assign("FogEnd", math.max(Settings.FogStart + 1, Settings.FogEnd))
+        elseif sky then
+            assign("FogColor", Color3.fromRGB(Settings.HorR, Settings.HorG, Settings.HorB))
+            assign("FogStart", 50000) assign("FogEnd", 100000)
+        else
+            for _, key in ipairs(fogProps) do release(key) end
         end
     end)
+    E.applying = false
+    if not ok and E.lastError ~= tostring(err) then E.lastError = tostring(err) warn("[Essential environment] " .. tostring(err)) end
 end
+EnforceSkybox = apply
+ResetSkybox = apply
+UI_Elements._ApplyEnvironment = apply
+UI_Elements._CleanupEnvironment = function()
+    E.stopped = true
+    apply()
+end
+local function EnableSkyboxListeners() apply() end
+local elapsed = 0
+table.insert(connections, RunService.Heartbeat:Connect(function(dt)
+    elapsed = elapsed + dt
+    if elapsed >= 0.2 then elapsed = 0 if Settings.SkyEnabled or Settings.CustomFog then apply() end end
+end))
+table.insert(connections, Lighting.ChildAdded:Connect(function()
+    if not E.applying and (Settings.SkyEnabled or Settings.CustomFog) then task.defer(apply) end
+end))
 
 local PresetDefinitions = {
     Day = { skyR = 120, skyG = 180, skyB = 255, horR = 220, horG = 235, horB = 255, bright = 60, exp = 50, clock = 14, starCount = 300, sunSize = 18, moonSize = 11, celestial = true },
@@ -1787,6 +1822,11 @@ local PresetDefinitions = {
     Night = { skyR = 18, skyG = 28, skyB = 75, horR = 40, horG = 55, horB = 105, bright = 20, exp = 35, clock = 0, starCount = 3500, sunSize = 0, moonSize = 14, celestial = true },
     Space = { skyR = 12, skyG = 8, skyB = 45, horR = 65, horG = 25, horB = 110, bright = 15, exp = 30, clock = 0, starCount = 5000, sunSize = 0, moonSize = 0, celestial = false },
     Purple = { skyR = 135, skyG = 45, skyB = 220, horR = 205, horG = 95, horB = 250, bright = 50, exp = 55, clock = 19, starCount = 2200, sunSize = 10, moonSize = 15, celestial = true },
+    Aurora = { skyR = 60, skyG = 220, skyB = 180, horR = 95, horG = 130, horB = 230, bright = 40, exp = 45, clock = 1, starCount = 4000, sunSize = 0, moonSize = 12, celestial = true },
+    Ocean = { skyR = 25, skyG = 100, skyB = 190, horR = 95, horG = 200, horB = 235, bright = 50, exp = 50, clock = 13, starCount = 250, sunSize = 16, moonSize = 11, celestial = true },
+    Crimson = { skyR = 165, skyG = 25, skyB = 45, horR = 245, horG = 95, horB = 70, bright = 38, exp = 48, clock = 18, starCount = 1200, sunSize = 18, moonSize = 10, celestial = true },
+    Frost = { skyR = 155, skyG = 205, skyB = 240, horR = 225, horG = 240, horB = 255, bright = 65, exp = 45, clock = 10, starCount = 300, sunSize = 16, moonSize = 11, celestial = true },
+    Golden = { skyR = 245, skyG = 170, skyB = 55, horR = 255, horG = 220, horB = 150, bright = 55, exp = 50, clock = 16, starCount = 500, sunSize = 20, moonSize = 11, celestial = true },
 }
 
 local function SyncSkySlidersSilent()
@@ -1866,7 +1906,7 @@ UI_Elements.horRSlider = CreateSlider(skyboxDropdown, "Horizon Color Red (R)", 0
 UI_Elements.horGSlider = CreateSlider(skyboxDropdown, "Horizon Color Green (G)", 0, 255, 220, function(v) Settings.HorG = v HandleSkySliderChange() end)
 UI_Elements.horBSlider = CreateSlider(skyboxDropdown, "Horizon Color Blue (B)", 0, 255, 255, function(v) Settings.HorB = v HandleSkySliderChange() end)
 UI_Elements.skyClockSlider = CreateSlider(skyboxDropdown, "Time (ClockTime)", 0, 24, 14, function(v) Settings.SkyClock = v HandleSkySliderChange() end)
-UI_Elements.presetDropdown = CreateDropdown(skyboxDropdown, "Skybox Preset", {"Default", "Day", "Sunset", "Night", "Space", "Purple", "Custom"}, "Default", function(selected) ApplyPreset(selected, false) end)
+UI_Elements.presetDropdown = CreateDropdown(skyboxDropdown, "Skybox Preset", {"Default", "Day", "Sunset", "Night", "Space", "Purple", "Aurora", "Ocean", "Crimson", "Frost", "Golden", "Custom"}, "Default", function(selected) ApplyPreset(selected, false) end)
 end
 UI_Elements._InitSkybox()
 UI_Elements._InitSkybox = nil
@@ -1937,14 +1977,6 @@ UI_Elements.toggleShowFPS = CreateToggle(hudDropdown, "Show FPS", true, function
 UI_Elements.toggleShowPing = CreateToggle(hudDropdown, "Show Ping", true, function(state) Settings.HUDPing = state RefreshHUDVisibility() end)
 UI_Elements.toggleShowKiller = CreateToggle(hudDropdown, "Show Killer Info", true, function(state) Settings.HUDKiller = state RefreshHUDVisibility() end)
 
--- NO STOP EMOTE TOGGLE IN VISUAL TAB
-UI_Elements.toggleNoStopEmote = CreateToggle(VisualPage, "No Stop Emote", false, function(state)
-    Settings.NoStopEmote = state
-    if UI_Elements._SetNoStopEmote then
-        UI_Elements._SetNoStopEmote(state)
-    end
-end)
-
 -- MISC PAGE
 local aspectDropdown = CreateDropdownSection(MiscPage, "Aspect Ratio (Stretched)")
 UI_Elements.toggleStretch = CreateToggle(aspectDropdown, "Enable Stretch", false, function(state) Settings.Stretch = state end)
@@ -1971,13 +2003,356 @@ UI_Elements.toggleFOVSet = CreateToggle(fovDropdown, "Enable FOV Changer", false
 end)
 UI_Elements.sliderSet = CreateSlider(fovDropdown, "FOV Value", 40, 140, 70, function(val) Settings.FOV = val pcall(ForceFOV) end)
 
+-- Integrated Music Player: one Sound, three views, one cancellable presentation state.
+UI_Elements._InitSoundPlayer = function()
+    local section = CreateDropdownSection(VisualPage, "Sound Player")
+    local state = {
+        closed = false, paused = false, version = 0, tick = 0,
+        collapsed = Settings.SoundPlayerCollapsed == true,
+        title = "No track selected", artist = "Roblox audio",
+        mode = "Compact", tweens = {}, animation = 0,
+        fraction = Vector2.new(0.5, 0.06), scale = 1, size = Vector2.new(320,146),
+        dragInput = nil, dragStart = nil, dragPosition = nil, dragging = false,
+        dragMoved = false, volumeInput = nil, connList = {},
+        safe = Vector2.new(12,12)
+    }
+    local layouts = {
+        Compact = {w=320,h=146},
+        Mini = {w=260,h=120},
+        ["Sound Player"] = {w=280,h=134}
+    }
+    local function normalize(mode) return layouts[mode] and mode or "Compact" end
+    state.mode = normalize(Settings.SoundPlayerDesign)
+    Settings.SoundPlayerDesign = state.mode
+    local sound = Instance.new("Sound")
+    sound.Name = "EssentialLocalSoundPlayer"
+    sound.Volume = math.clamp(tonumber(Settings.SoundPlayerVolume) or 50,0,100)/100
+    sound.Parent = game:GetService("SoundService")
+    local pill = Instance.new("Frame",ScreenGui)
+    pill.Name = "EssentialSoundPill" pill.AnchorPoint=Vector2.zero
+    pill.Size=UDim2.fromOffset(320,146) pill.BackgroundTransparency=1
+    pill.BorderSizePixel=0 pill.ClipsDescendants=false pill.Visible=false pill.ZIndex=20
+    local scale=Instance.new("UIScale",pill)
+    local corner=Instance.new("UICorner",pill) corner.CornerRadius=UDim.new(0,16)
+    local stroke=Instance.new("UIStroke",pill)
+    stroke.Thickness=1.2 stroke.ApplyStrokeMode=Enum.ApplyStrokeMode.Border stroke.LineJoinMode=Enum.LineJoinMode.Round
+    table.insert(ThemeElements.MainStrokes,stroke)
+    local surface=Instance.new("CanvasGroup",pill)
+    surface.Name="PlayerClip" surface.Position=UDim2.fromOffset(2,2) surface.Size=UDim2.new(1,-4,1,-4)
+    surface.BackgroundColor3=Color3.fromRGB(19,16,27) surface.BorderSizePixel=0
+    local surfaceCorner=Instance.new("UICorner",surface) surfaceCorner.CornerRadius=UDim.new(0,14)
+    local expanded=Instance.new("CanvasGroup",surface)
+    expanded.Name="ExpandedView" expanded.Size=UDim2.fromScale(1,1) expanded.BackgroundTransparency=1
+    local small=Instance.new("CanvasGroup",surface)
+    small.Name="CollapsedView" small.Size=UDim2.fromScale(1,1) small.BackgroundTransparency=1 small.GroupTransparency=1
+    local function connect(signal,fn)
+        local c=signal:Connect(fn) state.connList[#state.connList+1]=c return c
+    end
+    local function rounded(obj,r) Instance.new("UICorner",obj).CornerRadius=UDim.new(0,r) end
+    local function text(parent,value,size)
+        local l=Instance.new("TextLabel",parent) l.Text=value l.TextSize=size l.Font=Enum.Font.Gotham
+        l.TextColor3=Color3.fromRGB(240,237,247) l.BackgroundTransparency=1
+        l.TextXAlignment=Enum.TextXAlignment.Left l.TextTruncate=Enum.TextTruncate.AtEnd
+        return l
+    end
+    local function rect(obj,x,y,w,h)
+        obj.Position=UDim2.fromOffset(x,y) obj.Size=UDim2.fromOffset(w,h)
+    end
+    local art=Instance.new("ImageLabel",expanded) art.BackgroundColor3=BgElement art.ScaleType=Enum.ScaleType.Crop rounded(art,8)
+    local title=text(expanded,state.title,14) title.Font=Enum.Font.GothamBold
+    local artist=text(expanded,state.artist,11) artist.TextColor3=TextMuted
+    local clock=text(expanded,"0:00 / 0:00",10)
+    local bars=Instance.new("Frame",expanded) bars.BackgroundTransparency=1
+    local barList={}
+    for i=1,4 do
+        local bar=Instance.new("Frame",bars) bar.BorderSizePixel=0 rounded(bar,2)
+        table.insert(ThemeElements.Texts,bar) barList[i]=bar
+    end
+    local progress=Instance.new("Frame",expanded) progress.BackgroundColor3=Color3.fromRGB(58,50,70) progress.BorderSizePixel=0 rounded(progress,2)
+    local fill=Instance.new("Frame",progress) fill.BorderSizePixel=0 fill.Size=UDim2.fromScale(0,1) rounded(fill,2)
+    table.insert(ThemeElements.Texts,fill)
+    local input=Instance.new("TextBox",expanded)
+    input.PlaceholderText="Roblox Audio ID" input.Text=Settings.SoundPlayerId or "" input.ClearTextOnFocus=false
+    input.BackgroundColor3=BgDark input.TextColor3=Color3.fromRGB(240,237,247) input.PlaceholderColor3=TextMuted
+    input.Font=Enum.Font.Gotham input.TextSize=11 rounded(input,6)
+    local function button(value)
+        local b=Instance.new("TextButton",expanded) b.Text=value b.TextSize=11 b.Font=Enum.Font.GothamBold
+        b.TextColor3=Color3.fromRGB(240,237,247) b.BackgroundColor3=BgElement b.AutoButtonColor=true rounded(b,6)
+        return b
+    end
+    local play=button("Play") local pause=button("Pause")
+    local volumeLabel=text(expanded,"Vol",10) volumeLabel.TextColor3=TextMuted
+    local volumeBar=Instance.new("TextButton",expanded) volumeBar.Text="" volumeBar.AutoButtonColor=false
+    volumeBar.BackgroundColor3=Color3.fromRGB(58,50,70) volumeBar.BorderSizePixel=0 rounded(volumeBar,3)
+    local volumeFill=Instance.new("Frame",volumeBar) volumeFill.BorderSizePixel=0 rounded(volumeFill,3)
+    table.insert(ThemeElements.Texts,volumeFill)
+    local volumeHit=Instance.new("TextButton",volumeBar) volumeHit.BackgroundTransparency=1 volumeHit.Text=""
+    volumeHit.Size=UDim2.new(1,0,0,20) volumeHit.Position=UDim2.new(0,0,0.5,-10) volumeHit.ZIndex=3
+    local drag=Instance.new("TextButton",expanded) drag.Name="DragHandle" drag.Text="" drag.BackgroundTransparency=1 drag.ZIndex=4
+    local smallTitle=text(small,"Sound Player",11) smallTitle.Font=Enum.Font.GothamBold rect(smallTitle,12,8,112,18)
+    local smallDot=Instance.new("Frame",small) smallDot.Size=UDim2.fromOffset(5,5) smallDot.Position=UDim2.fromOffset(133,15)
+    rounded(smallDot,3) table.insert(ThemeElements.Texts,smallDot)
+    local smallHandle=Instance.new("TextButton",small) smallHandle.Text="" smallHandle.BackgroundTransparency=1
+    smallHandle.Size=UDim2.fromScale(1,1) smallHandle.ZIndex=4
+
+    local function getViewport()
+        local v=ScreenGui.AbsoluteSize
+        if v.X<=0 or v.Y<=0 then local cam=workspace.CurrentCamera v=cam and cam.ViewportSize or Vector2.new(1280,720) end
+        return v
+    end
+    local function safePosition(size,sc)
+        local vp=getViewport()
+        local mx=math.max(8,vp.X-size.X*sc-8) local my=math.max(8,vp.Y-size.Y*sc-8)
+        return Vector2.new(math.clamp(state.fraction.X*vp.X,8,mx),math.clamp(state.fraction.Y*vp.Y,8,my))
+    end
+    local function cancelTweens()
+        state.animation=state.animation+1
+        for _,tw in ipairs(state.tweens) do tw:Cancel() end
+        state.tweens={}
+    end
+    local function tween(obj,props)
+        local tw=TweenService:Create(obj,TweenInfo.new(0.23,Enum.EasingStyle.Quart,Enum.EasingDirection.Out),props)
+        state.tweens[#state.tweens+1]=tw tw:Play() return tw
+    end
+    local function layout(mode)
+        local p=layouts[mode]
+        if mode=="Compact" then
+            art.Visible=true artist.Visible=true
+            rect(art,10,10,46,46) rect(title,66,10,200,20) rect(artist,66,31,200,17) rect(clock,66,49,155,15)
+            rect(bars,271,29,26,24) rect(progress,10,71,296,3)
+            rect(input,10,83,192,25) rect(play,208,83,45,25) rect(pause,259,83,47,25)
+            rect(volumeLabel,10,116,28,16) rect(volumeBar,43,122,263,4) rect(drag,8,6,300,60)
+        elseif mode=="Mini" then
+            art.Visible=true artist.Visible=false
+            rect(art,8,9,30,30) rect(title,46,7,148,18) rect(clock,46,26,148,14)
+            rect(bars,208,20,22,18) rect(progress,8,48,238,3)
+            rect(input,8,60,130,23) rect(play,144,60,48,23) rect(pause,198,60,48,23)
+            rect(volumeLabel,8,92,24,14) rect(volumeBar,37,98,209,4) rect(drag,6,3,244,40)
+        else
+            art.Visible=false artist.Visible=true
+            rect(title,10,10,214,21) rect(artist,10,31,214,16) rect(clock,10,49,190,14)
+            rect(bars,232,28,24,24) rect(progress,10,69,256,3)
+            rect(input,10,80,138,23) rect(play,154,80,50,23) rect(pause,210,80,56,23)
+            rect(volumeLabel,10,110,24,13) rect(volumeBar,41,116,225,4) rect(drag,8,3,260,61)
+        end
+        if mode=="Sound Player" then title.Text="Sound Player" artist.Text=state.title
+        else title.Text=state.title artist.Text=state.artist end
+    end
+    local function render(animate)
+        if state.closed then return end
+        cancelTweens()
+        local revision=state.animation
+        layout(state.mode)
+        local p=layouts[state.mode]
+        local target=state.collapsed and Vector2.new(164,38) or Vector2.new(p.w,p.h)
+        local vp=getViewport()
+        -- Fit the largest view, so expanding at an edge never pushes the card off-screen.
+        state.scale=math.min(1,math.max(0.1,(vp.X-16)/p.w),math.max(0.1,(vp.Y-16)/p.h))
+        scale.Scale=state.scale
+        local position=safePosition(Vector2.new(p.w,p.h),state.scale)
+        state.safe=position state.size=target
+        expanded.Visible=true small.Visible=true
+        local radius=state.collapsed and 19 or 16
+        if animate and pill.Visible then
+            tween(pill,{Size=UDim2.fromOffset(target.X,target.Y),Position=UDim2.fromOffset(position.X,position.Y)})
+            tween(corner,{CornerRadius=UDim.new(0,radius)})
+            tween(surfaceCorner,{CornerRadius=UDim.new(0,radius-2)})
+            tween(expanded,{GroupTransparency=state.collapsed and 1 or 0,Position=UDim2.fromOffset(0,state.collapsed and 5 or 0)})
+            local last=tween(small,{GroupTransparency=state.collapsed and 0 or 1,Position=UDim2.fromOffset(0,state.collapsed and 0 or -4)})
+            local c
+            c=last.Completed:Connect(function(status)
+                if c then c:Disconnect() end
+                if state.closed or revision~=state.animation or status~=Enum.PlaybackState.Completed then return end
+                expanded.Visible=not state.collapsed small.Visible=state.collapsed
+            end)
+        else
+            pill.Size=UDim2.fromOffset(target.X,target.Y) pill.Position=UDim2.fromOffset(position.X,position.Y)
+            corner.CornerRadius=UDim.new(0,radius) surfaceCorner.CornerRadius=UDim.new(0,radius-2)
+            expanded.GroupTransparency=state.collapsed and 1 or 0 expanded.Position=UDim2.fromOffset(0,0)
+            small.GroupTransparency=state.collapsed and 0 or 1 small.Position=UDim2.fromOffset(0,0)
+            expanded.Visible=not state.collapsed small.Visible=state.collapsed
+        end
+        -- Invisible CanvasGroups must not capture input while they fade out.
+        drag.Active=not state.collapsed drag.Visible=not state.collapsed
+        input.Active=not state.collapsed input.TextEditable=not state.collapsed
+        play.Interactable=not state.collapsed pause.Interactable=not state.collapsed volumeHit.Interactable=not state.collapsed
+        smallHandle.Active=state.collapsed smallHandle.Visible=state.collapsed
+    end
+    local function toggleFold()
+        state.collapsed=not state.collapsed Settings.SoundPlayerCollapsed=state.collapsed
+        if input:IsFocused() then input:ReleaseFocus() end
+        render(true)
+    end
+    local function setVolume(value)
+        value=math.clamp(math.floor((tonumber(value) or 50)+0.5),0,100)
+        Settings.SoundPlayerVolume=value sound.Volume=value/100
+        volumeFill.Size=UDim2.fromScale(value/100,1) volumeLabel.Text=tostring(math.floor(value)).."%"
+        if UI_Elements.soundPlayerVolume then UI_Elements.soundPlayerVolume(value,true) end
+    end
+    local function updateVolume(position)
+        if volumeBar.AbsoluteSize.X>0 then setVolume((position.X-volumeBar.AbsolutePosition.X)/volumeBar.AbsoluteSize.X*100) end
+    end
+    connect(volumeHit.InputBegan,function(i)
+        if i.UserInputType==Enum.UserInputType.MouseButton1 or i.UserInputType==Enum.UserInputType.Touch then
+            state.volumeInput=i updateVolume(i.Position)
+        end
+    end)
+    local function startDrag(i)
+        if i.UserInputType~=Enum.UserInputType.MouseButton1 and i.UserInputType~=Enum.UserInputType.Touch then return end
+        state.dragInput=i state.dragging=true state.dragMoved=false state.dragStart=Vector2.new(i.Position.X,i.Position.Y)
+        state.dragPosition=Vector2.new(pill.Position.X.Offset,pill.Position.Y.Offset)
+        local vp=getViewport()
+        state.fraction=Vector2.new(state.dragPosition.X/vp.X,state.dragPosition.Y/vp.Y)
+        cancelTweens()
+        -- Continue size/fade transitions without a competing position tween while dragging.
+        local p=layouts[state.mode]
+        local w=state.collapsed and 164 or p.w
+        local h=state.collapsed and 38 or p.h
+        local r=state.collapsed and 19 or 16
+        tween(pill,{Size=UDim2.fromOffset(w,h)})
+        tween(corner,{CornerRadius=UDim.new(0,r)})
+        tween(surfaceCorner,{CornerRadius=UDim.new(0,r-2)})
+        tween(expanded,{GroupTransparency=state.collapsed and 1 or 0})
+        tween(small,{GroupTransparency=state.collapsed and 0 or 1})
+    end
+    connect(drag.InputBegan,startDrag) connect(smallHandle.InputBegan,startDrag)
+    connect(UserInputService.InputChanged,function(i)
+        if state.closed then return end
+        if state.volumeInput and (i==state.volumeInput or (state.volumeInput.UserInputType==Enum.UserInputType.MouseButton1 and i.UserInputType==Enum.UserInputType.MouseMovement)) then
+            updateVolume(i.Position)
+        end
+        if state.dragging and (i==state.dragInput or (state.dragInput.UserInputType==Enum.UserInputType.MouseButton1 and i.UserInputType==Enum.UserInputType.MouseMovement)) then
+            local delta=Vector2.new(i.Position.X,i.Position.Y)-state.dragStart
+            if delta.Magnitude>4 then state.dragMoved=true end
+            local vp=getViewport() local p=layouts[state.mode]
+            local desired=state.dragPosition+delta
+            local x=math.clamp(desired.X,8,math.max(8,vp.X-p.w*state.scale-8))
+            local y=math.clamp(desired.Y,8,math.max(8,vp.Y-p.h*state.scale-8))
+            pill.Position=UDim2.fromOffset(x,y) state.fraction=Vector2.new(x/vp.X,y/vp.Y)
+        end
+    end)
+    connect(UserInputService.InputEnded,function(i)
+        if i==state.volumeInput or i.UserInputType==Enum.UserInputType.MouseButton1 then state.volumeInput=nil end
+        if state.dragging and (i==state.dragInput or i.UserInputType==Enum.UserInputType.MouseButton1) then
+            local toggleClick=not state.dragMoved
+            state.dragging=false state.dragInput=nil
+            if toggleClick then toggleFold() else render(false) end
+        end
+    end)
+    connect(UserInputService.WindowFocusReleased,function()
+        state.dragging=false state.dragInput=nil state.volumeInput=nil
+        render(false)
+    end)
+    connect(ScreenGui:GetPropertyChangedSignal("AbsoluteSize"),function() render(false) end)
+
+    local function parse(value)
+        value=tostring(value or "")
+        return value:match("^%s*(%d+)%s*$") or value:match("^rbxassetid://(%d+)$")
+    end
+    local function refreshText()
+        smallTitle.Text=state.title
+        if state.mode=="Sound Player" then title.Text="Sound Player" artist.Text=state.title
+        else title.Text=state.title artist.Text=state.artist end
+    end
+    local function loadId(value)
+        local raw=tostring(value or input.Text or "")
+        local id=parse(raw)
+        if not id then
+            if raw:match("%S") then state.artist="Enter a numeric audio ID" refreshText() return false end
+            state.version=state.version+1 Settings.SoundPlayerId="" sound:Stop() sound.SoundId=""
+            state.paused=false state.title="No track selected" state.artist="Roblox audio" art.Image="" input.Text="" refreshText()
+            return false
+        end
+        if sound.SoundId=="rbxassetid://"..id then input.Text=id return true end
+        state.version=state.version+1 local version=state.version
+        Settings.SoundPlayerId=id input.Text=id sound:Stop() state.paused=false
+        sound.SoundId="rbxassetid://"..id state.title="Audio "..id state.artist="Loading..." refreshText()
+        art.Image="rbxthumb://type=Asset&id="..id.."&w=150&h=150"
+        task.spawn(function()
+            local ok,info=pcall(function() return game:GetService("MarketplaceService"):GetProductInfo(tonumber(id)) end)
+            if state.closed or state.version~=version then return end
+            if ok and type(info)=="table" then
+                state.title=tostring(info.Name or ("Audio "..id))
+                state.artist=info.Creator and tostring(info.Creator.Name) or "Roblox audio"
+            else state.artist="Metadata unavailable" end
+            refreshText()
+        end)
+        task.delay(12,function()
+            if not state.closed and state.version==version and not sound.IsLoaded then
+                state.artist="Audio unavailable / access restricted" refreshText()
+            end
+        end)
+        return true
+    end
+    connect(input.FocusLost,function() loadId(input.Text) end)
+    connect(play.MouseButton1Click,function()
+        if not loadId(input.Text) then return end
+        if state.paused then sound:Resume() elseif not sound.IsPlaying then sound:Play() end
+        state.paused=false
+    end)
+    connect(pause.MouseButton1Click,function()
+        if sound.IsPlaying then sound:Pause() state.paused=true end
+    end)
+    connect(sound.Ended,function() state.paused=false end)
+    local function formatTime(value)
+        value=math.max(0,math.floor(value)) return string.format("%d:%02d",math.floor(value/60),value%60)
+    end
+    local heartbeat
+    local function update(dt)
+        state.tick=state.tick+dt if state.tick<0.1 then return end state.tick=0
+        clock.Text=formatTime(sound.TimePosition).." / "..formatTime(sound.TimeLength)
+        local fraction=sound.TimeLength>0 and math.clamp(sound.TimePosition/sound.TimeLength,0,1) or 0
+        fill.Size=UDim2.fromScale(fraction,1)
+        smallDot.BackgroundTransparency=sound.IsPlaying and 0 or 0.65
+        local height=bars.Size.Y.Offset
+        for i,bar in ipairs(barList) do
+            -- Decorative playback indicator, not a fabricated audio spectrum.
+            local h=sound.IsPlaying and (5+math.abs(math.sin(os.clock()*4+i))*math.max(1,height-5)) or 5
+            rect(bar,(i-1)*6,(height-h)/2,3,h)
+        end
+    end
+    UI_Elements._SetSoundPlayer=function(enabled)
+        Settings.SoundPlayerEnabled=enabled==true pill.Visible=Settings.SoundPlayerEnabled
+        if pill.Visible then
+            if not heartbeat then heartbeat=RunService.Heartbeat:Connect(update) end
+            render(false)
+        else
+            sound:Stop() state.paused=false state.dragging=false state.dragInput=nil state.volumeInput=nil
+            cancelTweens()
+            if heartbeat then heartbeat:Disconnect() heartbeat=nil end
+        end
+    end
+    UI_Elements.soundPlayerDesign=function(mode)
+        state.mode=normalize(mode) Settings.SoundPlayerDesign=state.mode
+        if UI_Elements.dropdownSoundPlayerDesign then UI_Elements.dropdownSoundPlayerDesign(state.mode,true) end
+        render(true) -- presentation only; never changes SoundId, TimePosition or playback.
+    end
+    UI_Elements.soundPlayerCollapsed=function(value)
+        state.collapsed=value==true Settings.SoundPlayerCollapsed=state.collapsed render(true)
+    end
+    UI_Elements.toggleSoundPlayer=CreateToggle(section,"Enable Sound Player",false,UI_Elements._SetSoundPlayer)
+    UI_Elements.dropdownSoundPlayerDesign=CreateDropdown(section,"Design",{"Compact","Mini","Sound Player"},state.mode,UI_Elements.soundPlayerDesign)
+    UI_Elements.soundPlayerId=function(value) input.Text=tostring(value or "") loadId(input.Text) end
+    UI_Elements.soundPlayerVolume=CreateSlider(section,"Volume (%)",0,100,Settings.SoundPlayerVolume,setVolume)
+    UI_Elements._CleanupSoundPlayer=function()
+        if state.closed then return end
+        state.closed=true state.version=state.version+1 cancelTweens()
+        if heartbeat then heartbeat:Disconnect() heartbeat=nil end
+        for _,c in ipairs(state.connList) do c:Disconnect() end state.connList={}
+        sound:Stop() sound:Destroy() pill:Destroy()
+    end
+    render(false) setVolume(Settings.SoundPlayerVolume)
+end
+UI_Elements._InitSoundPlayer()
+UI_Elements._InitSoundPlayer=nil
+
 local speedhackDropdown = CreateDropdownSection(MiscPage, "Speedhack")
-UI_Elements.toggleSpeedSet = CreateToggle(speedhackDropdown, "Enable Speedhack", false, function(state) Settings.Speedhack = state end)
-UI_Elements.dropdownSpeedMode = CreateDropdown(speedhackDropdown, "Mode", {"Legit", "Rage"}, "Legit", function(val) Settings.SpeedMode = val end)
+UI_Elements.toggleSpeedSet = CreateToggle(speedhackDropdown, "Enable Speedhack", false, function(state) Settings.Speedhack = state if UI_Elements._SetSpeedhack then UI_Elements._SetSpeedhack(state) end end)
+UI_Elements.dropdownSpeedMode = CreateDropdown(speedhackDropdown, "Mode", {"Legit", "Rage"}, "Legit", function(val) Settings.SpeedMode = val if UI_Elements._ApplySpeedPreset then UI_Elements._ApplySpeedPreset(val) end end)
 UI_Elements.sliderSpeedSet = CreateSlider(speedhackDropdown, "Speed Value", 16, 150, 22, function(val) Settings.SpeedValue = val end)
 
 local jumphackDropdown = CreateDropdownSection(MiscPage, "Jumphack")
-UI_Elements.toggleJumphack = CreateToggle(jumphackDropdown, "Enable Jumphack", false, function(state) Settings.Jumphack = state end)
+UI_Elements.toggleJumphack = CreateToggle(jumphackDropdown, "Enable Jumphack", false, function(state) Settings.Jumphack = state if UI_Elements._SetJumphack then UI_Elements._SetJumphack(state) end end)
 UI_Elements.sliderJumpPower = CreateSlider(jumphackDropdown, "Jump Power", 30, 150, 50, function(val) Settings.JumpPower = val end)
 
 -- ==============================================
@@ -2077,7 +2452,7 @@ pcall(function()
     end
 
     -- Проверяет, находится ли персонаж в состоянии перелезания (vault), ремонта генератора, прыжка, сидения, смерти или любого другого спецдействия
-    local function IsCharacterInSpecialAction(char, hum, hrp, ignoreTrack)
+    local function IsCharacterInSpecialAction(char, hum, hrp, ignoreTrack, ignoreAirborne)
         if not char or not hum or not hrp or not hrp.Parent then return true end
         if hum.Health <= 0 or hrp.Anchored or hum.PlatformStand or hum.Sit or hum.SeatPart ~= nil then
             return true
@@ -2086,8 +2461,7 @@ pcall(function()
         local humState = hum:GetState()
         if humState == Enum.HumanoidStateType.Dead
             or humState == Enum.HumanoidStateType.Seated
-            or humState == Enum.HumanoidStateType.Jumping
-            or humState == Enum.HumanoidStateType.Freefall
+            or (not ignoreAirborne and (humState == Enum.HumanoidStateType.Jumping or humState == Enum.HumanoidStateType.Freefall))
             or humState == Enum.HumanoidStateType.Climbing
             or humState == Enum.HumanoidStateType.Swimming
             or humState == Enum.HumanoidStateType.PlatformStanding
@@ -2116,7 +2490,7 @@ pcall(function()
                 local actVal = target:GetAttribute("Action") or target:GetAttribute("State") or target:GetAttribute("CurrentAction") or target:GetAttribute("Interaction")
                 if type(actVal) == "string" then
                     local al = string.lower(actVal)
-                    if al ~= "" and al ~= "none" and al ~= "idle" and al ~= "normal" and al ~= "walk" and al ~= "run" and al ~= "sprint" and al ~= "crouch" and al ~= "emote" then
+                    if al ~= "" and al ~= "none" and al ~= "idle" and al ~= "normal" and al ~= "walk" and al ~= "run" and al ~= "sprint" and al ~= "crouch" and al ~= "emote" and not (ignoreAirborne and al == "jump") then
                         return true
                     end
                 end
@@ -2131,7 +2505,7 @@ pcall(function()
         -- Если игра отключила коллизию HumanoidRootPart или Torso для прохождения сквозь паллету/окно (при выключенном Noclip)
         if not Settings.Noclip and not hrp.CanCollide then
             local torso = char:FindFirstChild("UpperTorso") or char:FindFirstChild("Torso")
-            if torso and not torso.CanCollide then
+            if torso and not torso.CanCollide and char:GetAttribute("_EssentialDefaultTorsoCollide") == true then
                 return true
             end
         end
@@ -2198,7 +2572,8 @@ pcall(function()
         if not char or not hum or not hrp or not hrp.Parent then return end
 
         -- Если персонаж перелезает через окно/паллету, ремонтирует или находится в любом спецдействии — НЕ трогаем CFrame и НЕ блокируем констрейнты игры!
-        if IsCharacterInSpecialAction(char, hum, hrp, EmoteState.activeTrack) or hum.WalkSpeed <= 6 then
+        if IsCharacterInSpecialAction(char, hum, hrp, EmoteState.activeTrack)
+            or (UI_Elements._GetBaseWalkSpeed and UI_Elements._GetBaseWalkSpeed(hum) or hum.WalkSpeed) <= 6 then
             RestoreMoonwalkAutoRotate()
             return
         end
@@ -2597,9 +2972,6 @@ pcall(function()
             if tr.Priority ~= Enum.AnimationPriority.Action then
                 pcall(function() tr.Priority = Enum.AnimationPriority.Action end)
             end
-            if hum.MoveDirection.Magnitude >= 0.05 and hum.WalkSpeed < 8 and not Settings.Speedhack then
-                hum.WalkSpeed = 16
-            end
         end
     end
 
@@ -2671,6 +3043,151 @@ pcall(function()
         end
     end
 
+    -- Shared client movement owner. No position writes or forced velocity impulses.
+    local M = {char=nil,hum=nil,root=nil,base=nil,last=nil,overridden=false,conn=nil,
+        jump=nil,jumpAt=-math.huge,lastJump=-math.huge,lastGround=-math.huge,focused=true,needRelease=false,warned=false}
+    local function ObserveSpeed()
+        local h=M.hum
+        if not h or not h.Parent then return end
+        if M.last==nil or math.abs(h.WalkSpeed-M.last)>0.01 then M.base=h.WalkSpeed M.last=nil end
+    end
+    local function RestoreSpeed()
+        local h=M.hum
+        if h and h.Parent and M.overridden then
+            ObserveSpeed()
+            if h.Health>0 and h:GetState()~=Enum.HumanoidStateType.Dead and M.base~=nil then h.WalkSpeed=M.base end
+        end
+        M.last=nil M.overridden=false
+    end
+    local function RestoreJump()
+        local j=M.jump M.jump=nil
+        if not j or not j.h or not j.h.Parent then return end
+        pcall(function()
+            -- Do not overwrite a newer game write.
+            if math.abs(j.h[j.key]-j.applied)<0.01 then j.h[j.key]=j.base end
+        end)
+    end
+    local function BindMovement()
+        local c=LocalPlayer.Character local h=c and c:FindFirstChildWhichIsA("Humanoid")
+        if c~=M.char or h~=M.hum then
+            RestoreSpeed() RestoreJump()
+            M.char=c M.hum=h M.base=h and h.WalkSpeed or nil M.last=nil M.overridden=false M.warned=false
+            M.lastJump=-math.huge M.lastGround=-math.huge
+            local torso=c and (c:FindFirstChild("UpperTorso") or c:FindFirstChild("Torso"))
+            if torso then c:SetAttribute("_EssentialDefaultTorsoCollide",torso.CanCollide) end
+        end
+        M.root=c and c:FindFirstChild("HumanoidRootPart")
+    end
+    local function Locked()
+        local c,h,r=M.char,M.hum,M.root
+        if not c or not h or not r or not h.Parent or not r.Parent then return true end
+        if h.Health<=0 or r.Anchored or h.PlatformStand or h.Sit or h.SeatPart~=nil then return true end
+        local st=h:GetState()
+        if st==Enum.HumanoidStateType.Dead or st==Enum.HumanoidStateType.Seated
+            or st==Enum.HumanoidStateType.PlatformStanding or st==Enum.HumanoidStateType.Ragdoll
+            or st==Enum.HumanoidStateType.FallingDown or st==Enum.HumanoidStateType.GettingUp
+            or st==Enum.HumanoidStateType.Climbing or st==Enum.HumanoidStateType.Swimming then return true end
+        if HasGamePhysicsMover(c,r) then return true end
+        for _,obj in ipairs({c,h,LocalPlayer}) do
+            for _,key in ipairs({"Vaulting","IsVaulting","Interacting","IsInteracting","Repairing","IsRepairing",
+                "Healing","IsHealing","Stunned","IsStunned","Carried","IsCarried","Hooked","IsHooked",
+                "Downed","IsDowned","Busy","Locked","InAction"}) do
+                if obj:GetAttribute(key)==true then return true end
+            end
+        end
+        if LocalPlayer:GetAttribute("InLobby")==true or LocalPlayer:GetAttribute("Spectating")==true then return true end
+        local team=LocalPlayer.Team
+        if team then
+            local n=string.lower(team.Name)
+            if string.find(n,"lobby",1,true) or string.find(n,"spectat",1,true) or string.find(n,"menu",1,true) then return true end
+        end
+        return false
+    end
+    local function ShiftHeld()
+        local held=UserInputService:IsKeyDown(Enum.KeyCode.LeftShift) or UserInputService:IsKeyDown(Enum.KeyCode.RightShift)
+        if not M.focused or isMenuOpen or KeybindListening or UserInputService:GetFocusedTextBox() then M.needRelease=true return false end
+        if M.needRelease then if not held then M.needRelease=false end return false end
+        return held
+    end
+    local function MovementStep()
+        BindMovement()
+        local h=M.hum
+        if not h or not M.root then return end
+        ObserveSpeed()
+        if h.FloorMaterial~=Enum.Material.Air then M.lastGround=os.clock() end
+        local locked=Locked()
+        if M.jump and (locked or not Settings.Jumphack
+            or (os.clock()-M.jumpAt>0.15 and h.FloorMaterial~=Enum.Material.Air and h:GetState()~=Enum.HumanoidStateType.Jumping)) then RestoreJump() end
+        if not Settings.Speedhack or locked or M.base==nil or M.base<=0 then RestoreSpeed() return end
+        local active=Settings.SpeedMode=="Rage"
+        if Settings.SpeedMode=="Legit" then active=ShiftHeld() and M.base>10 end
+        if not active then RestoreSpeed() return end
+        local target=math.clamp(tonumber(Settings.SpeedValue) or 22,16,150)
+        if math.abs(h.WalkSpeed-target)>0.01 then h.WalkSpeed=target end
+        M.last=h.WalkSpeed M.overridden=true
+    end
+    local function UpdateMovement()
+        if Settings.Speedhack or Settings.Jumphack then
+            if not M.conn then M.conn=RunService.Heartbeat:Connect(MovementStep) end
+        elseif M.conn then M.conn:Disconnect() M.conn=nil end
+    end
+    UI_Elements._GetBaseWalkSpeed=function(h)
+        if h and h==M.hum and M.overridden then return M.base end
+        return h and h.WalkSpeed or 0
+    end
+    UI_Elements._SetSpeedhack=function(enabled)
+        RestoreSpeed() Settings.Speedhack=enabled==true BindMovement() UpdateMovement()
+    end
+    UI_Elements._ApplySpeedPreset=function(mode)
+        RestoreSpeed() Settings.SpeedMode=mode=="Rage" and "Rage" or "Legit" UpdateMovement()
+    end
+    UI_Elements._SetJumphack=function(enabled)
+        RestoreJump() Settings.Jumphack=enabled==true BindMovement() UpdateMovement()
+    end
+    UI_Elements._RequestJump=function()
+        if not Settings.Jumphack or KeybindListening or UserInputService:GetFocusedTextBox() then return end
+        BindMovement() ObserveSpeed()
+        local h=M.hum
+        if Locked() or not h or not M.base or M.base<=6 or os.clock()-M.lastJump<0.35 then return end
+        local justNative=h:GetState()==Enum.HumanoidStateType.Jumping and os.clock()-M.lastGround<0.12
+        if (h.FloorMaterial==Enum.Material.Air and not justNative) or h:GetState()==Enum.HumanoidStateType.Freefall then return end
+        if IsCharacterInSpecialAction(M.char,h,M.root,EmoteState.activeTrack,true) then return end
+        if not h:GetStateEnabled(Enum.HumanoidStateType.Jumping) then
+            if not M.warned then warn("[Essential Jump] Jumping is disabled by the game; no forced impulse was applied.") M.warned=true end
+            return
+        end
+        RestoreJump()
+        local key=h.UseJumpPower and "JumpPower" or "JumpHeight"
+        local power=math.clamp(tonumber(Settings.JumpPower) or 50,30,150)
+        local value=h.UseJumpPower and power or power*power/(2*math.max(workspace.Gravity,1))
+        M.jump={h=h,key=key,base=h[key],applied=value}
+        h[key]=value M.lastJump=os.clock() M.jumpAt=M.lastJump h.Jump=true
+    end
+    UI_Elements._CleanupMovement=function()
+        RestoreSpeed() RestoreJump()
+        if M.conn then M.conn:Disconnect() M.conn=nil end
+    end
+    table.insert(connections,UserInputService.WindowFocusReleased:Connect(function()
+        M.focused=false M.needRelease=true if Settings.SpeedMode=="Legit" then RestoreSpeed() end
+    end))
+    table.insert(connections,UserInputService.WindowFocused:Connect(function() M.focused=true M.needRelease=true end))
+    table.insert(connections,UserInputService.TextBoxFocused:Connect(function()
+        M.needRelease=true if Settings.SpeedMode=="Legit" then RestoreSpeed() end
+    end))
+    table.insert(connections,UserInputService.InputEnded:Connect(function(i)
+        if i.KeyCode~=Enum.KeyCode.LeftShift and i.KeyCode~=Enum.KeyCode.RightShift then return end
+        local other=i.KeyCode==Enum.KeyCode.LeftShift and Enum.KeyCode.RightShift or Enum.KeyCode.LeftShift
+        if not UserInputService:IsKeyDown(other) and Settings.SpeedMode=="Legit" then RestoreSpeed() end
+    end))
+    table.insert(connections,UserInputService.JumpRequest:Connect(function()
+        if UserInputService.TouchEnabled and Settings.DeviceMode=="Phone" and UI_Elements._RequestJump then
+            UI_Elements._RequestJump()
+        end
+    end))
+    table.insert(connections,LocalPlayer.CharacterRemoving:Connect(function(c)
+        if M.char==c then RestoreSpeed() RestoreJump() M.char=nil M.hum=nil M.root=nil M.base=nil end
+    end))
+
     table.insert(connections, LocalPlayer.CharacterAdded:Connect(function(newChar)
         MoonwalkState.savedAutoRotate = nil
         if Settings.NoStopEmote then AttachCharacterEmoteListeners(newChar) end
@@ -2694,20 +3211,8 @@ pcall(function()
                 end
             end
 
-            if input.KeyCode == Enum.KeyCode.Space then
-                if Settings.Jumphack and LocalPlayer.Character then
-                    local hum = LocalPlayer.Character:FindFirstChildWhichIsA("Humanoid")
-                    local hrp = LocalPlayer.Character:FindFirstChild("HumanoidRootPart")
-                    if hum and hrp and hum.FloorMaterial ~= Enum.Material.Air and not hrp.Anchored and not IsCharacterInSpecialAction(LocalPlayer.Character, hum, hrp, EmoteState.activeTrack) then
-                        task.spawn(function()
-                            task.wait(0.05)
-                            if hum and hrp and hum.WalkSpeed > 5 and not hrp.Anchored and not IsCharacterInSpecialAction(LocalPlayer.Character, hum, hrp, EmoteState.activeTrack) then
-                                hrp.AssemblyLinearVelocity = Vector3.new(hrp.AssemblyLinearVelocity.X, Settings.JumpPower, hrp.AssemblyLinearVelocity.Z)
-                                hum:ChangeState(Enum.HumanoidStateType.Jumping)
-                            end
-                        end)
-                    end
-                end
+            if input.KeyCode == Enum.KeyCode.Space and UI_Elements._RequestJump then
+                UI_Elements._RequestJump()
             end
         end
     end))
@@ -2746,6 +3251,14 @@ local function getStretchRatio()
     if Settings.StretchPreset == "Custom" then return Settings.StretchCustom / 100 end
     return presetToScale[Settings.StretchPreset] or 1.0
 end
+
+-- NO STOP EMOTE TOGGLE IN MISC TAB
+UI_Elements.toggleNoStopEmote = CreateToggle(MiscPage, "No Stop Emote", false, function(state)
+    Settings.NoStopEmote = state
+    if UI_Elements._SetNoStopEmote then
+        UI_Elements._SetNoStopEmote(state)
+    end
+end)
 
 -- CONFIG SYSTEM
 local configFolder = "EssentialConfigs"
@@ -2842,6 +3355,11 @@ CreateButton(ConfigPage, "Load Config", false, function()
                 if UI_Elements.sliderFogR then UI_Elements.sliderFogR(data.FogR or 150) end
                 if UI_Elements.sliderFogG then UI_Elements.sliderFogG(data.FogG or 150) end
                 if UI_Elements.sliderFogB then UI_Elements.sliderFogB(data.FogB or 150) end
+                if UI_Elements.soundPlayerId then UI_Elements.soundPlayerId(data.SoundPlayerId or "") end
+                if UI_Elements.soundPlayerVolume then UI_Elements.soundPlayerVolume(data.SoundPlayerVolume or 50) end
+                if UI_Elements.soundPlayerDesign then UI_Elements.soundPlayerDesign(data.SoundPlayerDesign or "Compact") end
+                if UI_Elements.soundPlayerCollapsed then UI_Elements.soundPlayerCollapsed(data.SoundPlayerCollapsed == true) end
+                if UI_Elements.toggleSoundPlayer then UI_Elements.toggleSoundPlayer(data.SoundPlayerEnabled or false) end
                 if UI_Elements.toggleStretch then UI_Elements.toggleStretch(data.Stretch or false) end
                 if UI_Elements.dropdownStretch then UI_Elements.dropdownStretch(data.StretchPreset or "16:9 (Default)") end
                 if UI_Elements.sliderStretch then UI_Elements.sliderStretch(data.StretchCustom or 100) end
@@ -2868,9 +3386,9 @@ CreateButton(ConfigPage, "Load Config", false, function()
                 if UI_Elements.toggleShowFPS then UI_Elements.toggleShowFPS(data.HUDFPS ~= false) end
                 if UI_Elements.toggleShowPing then UI_Elements.toggleShowPing(data.HUDPing ~= false) end
                 if UI_Elements.toggleShowKiller then UI_Elements.toggleShowKiller(data.HUDKiller ~= false) end
-                if UI_Elements.sliderAccR then UI_Elements.sliderAccR(data.AccentR or 168) end
-                if UI_Elements.sliderAccG then UI_Elements.sliderAccG(data.AccentG or 85) end
-                if UI_Elements.sliderAccB then UI_Elements.sliderAccB(data.AccentB or 247) end
+                if UI_Elements.sliderAccR then UI_Elements.sliderAccR(data.AccentR or 100) end
+                if UI_Elements.sliderAccG then UI_Elements.sliderAccG(data.AccentG or 100) end
+                if UI_Elements.sliderAccB then UI_Elements.sliderAccB(data.AccentB or 255) end
                 if UI_Elements.dropdownDeviceMode then UI_Elements.dropdownDeviceMode(data.DeviceMode or "PC") end
                 ApplyTheme()
                 StatusLabel("Status: Loaded '" .. CurrentConfigName .. "'!")
@@ -3621,6 +4139,11 @@ end)
 
 -- UNLOAD
 local function UnloadScript()
+    if UI_Elements._CleanupMovement then UI_Elements._CleanupMovement() end
+    mainMenuRevision = mainMenuRevision + 1
+    if mainMenuTween then mainMenuTween:Cancel() mainMenuTween=nil end
+    if UI_Elements._CleanupBackground then UI_Elements._CleanupBackground() end
+    if UI_Elements._CleanupSoundPlayer then UI_Elements._CleanupSoundPlayer() end
     if UI_Elements._SetNoStopEmote then UI_Elements._SetNoStopEmote(false) end
     for _, conn in ipairs(connections) do if conn then pcall(function() conn:Disconnect() end) end end
     if noclipConnection then noclipConnection:Disconnect() noclipConnection = nil end
@@ -3629,9 +4152,9 @@ local function UnloadScript()
     pcall(function() RunService:UnbindFromRenderStep("EssentialFOVLock") end)
     if UI_Elements._StopMoonwalk then UI_Elements._StopMoonwalk() end
     if UI_Elements._SetNoStopEmote then UI_Elements._SetNoStopEmote(false) end
-    RestoreNoclipCollisions() ResetSkybox() TerminateEssentialHUD() RestoreLowGraphics()
-    Lighting.FogStart = DefaultLighting.FogStart Lighting.FogEnd = DefaultLighting.FogEnd
-    if not Settings.SkyEnabled then Lighting.FogColor = DefaultLighting.FogColor end
+    RestoreNoclipCollisions()
+    if UI_Elements._CleanupEnvironment then UI_Elements._CleanupEnvironment() end
+    TerminateEssentialHUD() RestoreLowGraphics()
     for _, p in pairs(Players:GetPlayers()) do
         if p.Character then
             if p.Character:FindFirstChild("EssentialESP") then p.Character.EssentialESP:Destroy() end
@@ -3650,7 +4173,6 @@ local function UnloadScript()
     if currentLight then currentLight:Destroy() end
     if workspace.CurrentCamera then workspace.CurrentCamera.FieldOfView = DefaultFOV end
     if LocalPlayer.Character and LocalPlayer.Character:FindFirstChild("Humanoid") then
-        LocalPlayer.Character.Humanoid.WalkSpeed = 16
         LocalPlayer.Character.Humanoid.AutoRotate = true
     end
     if CrosshairCenter then CrosshairCenter:Destroy() end
@@ -3660,7 +4182,6 @@ CreateButton(ConfigPage, "Unload Script", true, UnloadScript)
 ApplyTheme()
 
 -- MAIN LOOP
-local wasLegitOverriding = false
 
 table.insert(connections, RunService.RenderStepped:Connect(function()
     pcall(function()
@@ -3685,46 +4206,7 @@ table.insert(connections, RunService.RenderStepped:Connect(function()
                 CrosshairV.Size = UDim2.new(0, Settings.CHWid, 0, Settings.CHLen) CrosshairV.BackgroundColor3 = chColor
             end
         end
-        if Settings.CustomFog then
-            Lighting.FogColor = Color3.fromRGB(Settings.FogR, Settings.FogG, Settings.FogB) Lighting.FogStart = Settings.FogStart Lighting.FogEnd = Settings.FogEnd
-            for _, obj in ipairs(Lighting:GetChildren()) do if obj:IsA("Atmosphere") then obj.Parent = nil end end
-        end
         if LocalPlayer.Character then
-            local humanoid = LocalPlayer.Character:FindFirstChildWhichIsA("Humanoid")
-            if humanoid then
-                local currentIntentSpeed = humanoid.WalkSpeed
-                local isOverridden = (Settings.Speedhack and Settings.SpeedMode == "Rage") or wasLegitOverriding
-                local isCrouching = false
-                if not isOverridden then isCrouching = currentIntentSpeed > 0 and currentIntentSpeed <= 10 end
-                local isDead = humanoid.Health <= 0
-                local shiftHeld = UserInputService:IsKeyDown(Enum.KeyCode.LeftShift) or UserInputService:IsKeyDown(Enum.KeyCode.RightShift)
-                local isMoving = humanoid.MoveDirection.Magnitude > 0
-                if Settings.Speedhack then
-                    Settings.wasSpeedhack = true
-                    if Settings.SpeedMode == "Rage" then
-                        humanoid.WalkSpeed = Settings.SpeedValue
-                        wasLegitOverriding = false
-                    elseif Settings.SpeedMode == "Legit" then
-                        if shiftHeld and isMoving and not isDead and not isCrouching then
-                            if humanoid.WalkSpeed ~= Settings.SpeedValue then
-                                humanoid.WalkSpeed = Settings.SpeedValue
-                            end
-                            wasLegitOverriding = true
-                        else
-                            if wasLegitOverriding then
-                                wasLegitOverriding = false
-                                if not isDead and not isCrouching then humanoid.WalkSpeed = 16 end
-                            end
-                        end
-                    end
-                else
-                    if Settings.wasSpeedhack then
-                        wasLegitOverriding = false
-                        if currentIntentSpeed > 18 then humanoid.WalkSpeed = 22 elseif currentIntentSpeed > 10 then humanoid.WalkSpeed = 16 end
-                        Settings.wasSpeedhack = false
-                    end
-                end
-            end
             local rootPart = LocalPlayer.Character:FindFirstChild("HumanoidRootPart")
             if Settings.Flashlight and rootPart then
                 if not currentLight or currentLight.Parent ~= rootPart then
