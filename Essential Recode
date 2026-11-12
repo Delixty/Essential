@@ -353,9 +353,14 @@ local function TagThemeRolesInTree(root)
     local w = Themes.Winter
     local nodes = root:GetDescendants()
     table.insert(nodes, 1, root)
+    local seen = UI_Elements._TagSeen
+    if not seen then seen = setmetatable({}, { __mode = "k" }) UI_Elements._TagSeen = seen end
+    local decorRoot = UI_Elements._WinterDecor
 
     for _, obj in ipairs(nodes) do
-        if obj.Name ~= "WinterDecorOverlay" and not obj:IsDescendantOf(UI_Elements._WinterDecor or game) then
+        local sc = seen[obj] or 0
+        if sc < 2 and obj.Name ~= "WinterDecorOverlay" and not (decorRoot and obj:IsDescendantOf(decorRoot)) then
+            seen[obj] = sc + 1
             -- Разметка фоновых ролей
             if (obj:IsA("Frame") or obj:IsA("CanvasGroup") or obj:IsA("ScrollingFrame") or obj:IsA("TextButton") or obj:IsA("TextLabel") or obj:IsA("ImageLabel"))
                 and not obj:GetAttribute("_ThemeBgRole") then
@@ -415,6 +420,11 @@ local function ApplyTheme(themeName, instant, accentOnly)
     local twInfo = TweenInfo.new(instant and 0 or 0.25, Enum.EasingStyle.Quad, Enum.EasingDirection.Out)
     local function setOrTween(obj, props)
         if not obj or not obj.Parent then return end
+        local changed = false
+        for k, v in pairs(props) do
+            if obj[k] ~= v then changed = true break end
+        end
+        if not changed then return end
         if instant then
             for k, v in pairs(props) do obj[k] = v end
         else
@@ -683,40 +693,42 @@ end
 
 local function RestoreSingleObjectRecord(obj, rec)
     if not obj or not obj.Parent or not rec then return end
-    local orig = rec.orig
-    local applied = rec.applied
+    local orig, applied = rec.orig, rec.applied
     if not orig or not applied then return end
-
     if obj:IsA("BasePart") then
-        -- Восстанавливаем только те свойства, которые не были перезаписаны самой игрой после вмешательства LowGraphics
-        if orig.CastShadow ~= nil and applied.CastShadow ~= nil and obj.CastShadow == applied.CastShadow then
-            obj.CastShadow = orig.CastShadow
-        end
-        if orig.Material ~= nil and applied.Material ~= nil and obj.Material == applied.Material then
-            obj.Material = orig.Material
-        end
-        if orig.MaterialVariant ~= nil and applied.MaterialVariant ~= nil and obj.MaterialVariant == applied.MaterialVariant then
-            obj.MaterialVariant = orig.MaterialVariant
-        end
-        if orig.Reflectance ~= nil and applied.Reflectance ~= nil and math.abs(obj.Reflectance - applied.Reflectance) < 0.001 then
-            obj.Reflectance = orig.Reflectance
-        end
-        if obj:IsA("MeshPart") and orig.TextureID ~= nil and applied.TextureID ~= nil and obj.TextureID == applied.TextureID then
+        if applied.CastShadow ~= nil and orig.CastShadow ~= nil then obj.CastShadow = orig.CastShadow end
+        if applied.Material ~= nil and orig.Material ~= nil then obj.Material = orig.Material end
+        if applied.MaterialVariant ~= nil and orig.MaterialVariant ~= nil then obj.MaterialVariant = orig.MaterialVariant end
+        if applied.Reflectance ~= nil and orig.Reflectance ~= nil then obj.Reflectance = orig.Reflectance end
+        if obj:IsA("MeshPart") and applied.TextureID ~= nil and orig.TextureID ~= nil then
             pcall(function() obj.TextureID = orig.TextureID end)
         end
     elseif obj:IsA("SpecialMesh") then
-        if orig.TextureId ~= nil and applied.TextureId ~= nil and obj.TextureId == applied.TextureId then
-            pcall(function() obj.TextureId = orig.TextureId end)
-        end
+        if applied.TextureId ~= nil and orig.TextureId ~= nil then pcall(function() obj.TextureId = orig.TextureId end) end
     elseif obj:IsA("Decal") or obj:IsA("Texture") then
-        if orig.Transparency ~= nil and applied.Transparency ~= nil and math.abs(obj.Transparency - applied.Transparency) < 0.001 then
-            obj.Transparency = orig.Transparency
-        end
+        if applied.Transparency ~= nil and orig.Transparency ~= nil then obj.Transparency = orig.Transparency end
     elseif obj:IsA("ParticleEmitter") or obj:IsA("Trail") or obj:IsA("Beam") or obj:IsA("Smoke") or obj:IsA("Fire") or obj:IsA("Sparkles") then
-        if orig.Enabled ~= nil and applied.Enabled ~= nil and obj.Enabled == applied.Enabled then
-            obj.Enabled = orig.Enabled
+        if applied.Enabled ~= nil and orig.Enabled ~= nil then obj.Enabled = orig.Enabled end
+    end
+end
+
+function LowGraphicsState.FlushRestore(sliced)
+    local pending = LowGraphicsState.PendingRestore
+    if not pending then return end
+    local token = {}
+    LowGraphicsState.RestoreToken = token
+    local n, t0 = 0, os.clock()
+    for obj, rec in pairs(pending) do
+        pending[obj] = nil
+        pcall(RestoreSingleObjectRecord, obj, rec)
+        n = n + 1
+        if sliced and n % 64 == 0 and os.clock() - t0 > 0.003 then
+            task.wait()
+            if LowGraphicsState.RestoreToken ~= token then return end
+            t0 = os.clock()
         end
     end
+    if LowGraphicsState.PendingRestore == pending then LowGraphicsState.PendingRestore = nil end
 end
 
 local function ProcessLowGFXObject(obj, mode, profile, charSet)
@@ -901,6 +913,7 @@ local function DisconnectLowGFXListeners()
 end
 
 local function RestoreLowGraphics()
+    LowGraphicsState.ApplyToken = (LowGraphicsState.ApplyToken or 0) + 1
     LowGraphicsState.WorkerId = LowGraphicsState.WorkerId + 1
     LowGraphicsState.Active = false
     LowGraphicsState.AppliedMode = nil
@@ -909,15 +922,16 @@ local function RestoreLowGraphics()
     DisconnectLowGFXListeners()
 
     -- 1. Восстанавливаем все изменённые объекты карты (включая появившиеся во время работы LowGraphics)
-    for obj, rec in pairs(LowGraphicsState.ObjectRecords) do
-        RestoreSingleObjectRecord(obj, rec)
-    end
+    local pending = LowGraphicsState.PendingRestore or setmetatable({}, { __mode = "k" })
+    for obj, rec in pairs(LowGraphicsState.ObjectRecords) do pending[obj] = rec end
+    LowGraphicsState.PendingRestore = pending
     LowGraphicsState.ObjectRecords = setmetatable({}, { __mode = "k" })
+    task.spawn(LowGraphicsState.FlushRestore, true)
     LowGraphicsState.ProcessedMode = setmetatable({}, { __mode = "k" })
 
     -- 2. Восстанавливаем PostEffects в Lighting и Camera
     for fx, rec in pairs(LowGraphicsState.PostEffectRecords) do
-        if fx and fx.Parent and rec.appliedEnabled ~= nil and fx.Enabled == rec.appliedEnabled then
+        if fx and fx.Parent and rec.appliedEnabled ~= nil then
             fx.Enabled = rec.origEnabled
         end
     end
@@ -927,30 +941,18 @@ local function RestoreLowGraphics()
     local terrain = workspace:FindFirstChildOfClass("Terrain")
     local tSnap = LowGraphicsState.TerrainSnapshot
     if terrain and tSnap then
-        if tSnap.appliedWaveSize ~= nil and math.abs(terrain.WaterWaveSize - tSnap.appliedWaveSize) < 0.001 then
-            terrain.WaterWaveSize = tSnap.origWaveSize
-        end
-        if tSnap.appliedWaveSpeed ~= nil and math.abs(terrain.WaterWaveSpeed - tSnap.appliedWaveSpeed) < 0.001 then
-            terrain.WaterWaveSpeed = tSnap.origWaveSpeed
-        end
-        if tSnap.appliedReflectance ~= nil and math.abs(terrain.WaterReflectance - tSnap.appliedReflectance) < 0.001 then
-            terrain.WaterReflectance = tSnap.origReflectance
-        end
+        terrain.WaterWaveSize = tSnap.origWaveSize
+        terrain.WaterWaveSpeed = tSnap.origWaveSpeed
+        terrain.WaterReflectance = tSnap.origReflectance
     end
     LowGraphicsState.TerrainSnapshot = nil
 
     -- 4. Восстанавливаем настройки Lighting, если они не были изменены другой системой
     local lSnap = LowGraphicsState.LightingSnapshot
     if lSnap then
-        if lSnap.appliedShadows ~= nil and Lighting.GlobalShadows == lSnap.appliedShadows then
-            Lighting.GlobalShadows = lSnap.origShadows
-        end
+        if lSnap.appliedShadows ~= nil then Lighting.GlobalShadows = lSnap.origShadows end
         if lSnap.origTech ~= nil and lSnap.appliedTech ~= nil then
-            pcall(function()
-                if Lighting.Technology == lSnap.appliedTech then
-                    Lighting.Technology = lSnap.origTech
-                end
-            end)
+            pcall(function() Lighting.Technology = lSnap.origTech end)
         end
     end
     LowGraphicsState.LightingSnapshot = nil
@@ -1040,6 +1042,9 @@ end
 
 local function ApplyLowGraphics()
     if not Settings.LowGraphics then return end
+    LowGraphicsState.FlushRestore(false)
+    local applyToken = (LowGraphicsState.ApplyToken or 0) + 1
+    LowGraphicsState.ApplyToken = applyToken
     local mode = Settings.TextureQuality
     local profile = GetTextureProfile(mode)
 
@@ -1087,6 +1092,9 @@ local function ApplyLowGraphics()
         end
     end)
 
+    task.wait(0.15)
+    if LowGraphicsState.ApplyToken ~= applyToken or not Settings.LowGraphics then return end
+
     if Lighting.GlobalShadows ~= profile.Shadows then
         Lighting.GlobalShadows = profile.Shadows
     end
@@ -1098,6 +1106,9 @@ local function ApplyLowGraphics()
         end
         LowGraphicsState.LightingSnapshot.appliedTech = profile.Tech
     end)
+
+    task.wait(0.15)
+    if LowGraphicsState.ApplyToken ~= applyToken or not Settings.LowGraphics then return end
 
     if terrain then
         terrain.WaterWaveSize = 0
@@ -1604,6 +1615,40 @@ table.insert(connections, ScreenGui:GetPropertyChangedSignal("AbsoluteSize"):Con
     end
 end))
 
+do
+    local MouseState = { free = false, saved = nil, modal = nil }
+    UI_Elements._SetMenuMouse = function(free)
+        if free == MouseState.free then return end
+        MouseState.free = free
+        if free then
+            MouseState.saved = { UserInputService.MouseBehavior, UserInputService.MouseIconEnabled }
+            if not MouseState.modal or not MouseState.modal.Parent then
+                local b = Instance.new("TextButton")
+                b.Name = "EssentialMouseFree" b.Size = UDim2.fromOffset(0, 0) b.BackgroundTransparency = 1
+                b.Text = "" b.Modal = true b.Parent = ScreenGui
+                MouseState.modal = b
+            end
+            MouseState.modal.Modal = true
+            pcall(function() RunService:UnbindFromRenderStep("EssentialMouseFree") end)
+            RunService:BindToRenderStep("EssentialMouseFree", Enum.RenderPriority.Last.Value, function()
+                if UserInputService.MouseBehavior ~= Enum.MouseBehavior.Default then
+                    UserInputService.MouseBehavior = Enum.MouseBehavior.Default
+                end
+                if not UserInputService.MouseIconEnabled then UserInputService.MouseIconEnabled = true end
+            end)
+        else
+            pcall(function() RunService:UnbindFromRenderStep("EssentialMouseFree") end)
+            if MouseState.modal then pcall(function() MouseState.modal.Modal = false end) end
+            local saved = MouseState.saved
+            MouseState.saved = nil
+            if saved then
+                pcall(function() UserInputService.MouseBehavior = saved[1] end)
+                pcall(function() UserInputService.MouseIconEnabled = saved[2] end)
+            end
+        end
+    end
+end
+
 local mainMenuTween = nil
 local mainMenuRevision = 0
 local function ToggleMenu()
@@ -1611,6 +1656,7 @@ local function ToggleMenu()
     local revision = mainMenuRevision
     if mainMenuTween then mainMenuTween:Cancel() mainMenuTween = nil end
     isMenuOpen = not isMenuOpen
+    if UI_Elements._SetMenuMouse then UI_Elements._SetMenuMouse(isMenuOpen) end
     local deviceScale = (Settings.DeviceMode == "Phone") and 0.85 or 1.0
     local targetScale = isMenuOpen and (deviceScale * ((Settings.UIScale or 100) / 100)) or deviceScale
     MainUIScale.Scale = targetScale
@@ -2144,13 +2190,27 @@ UI_Elements._CursorOver = function(target)
     end
     return true
 end
+UI_Elements._RightClickTargets = {}
 UI_Elements._OnRightClick = function(target, callback)
-    local last = 0
-    table.insert(connections, UserInputService.InputBegan:Connect(function(input)
-        if input.UserInputType ~= Enum.UserInputType.MouseButton2 then return end
-        if os.clock() - last < 0.2 then return end
-        if UI_Elements._CursorOver(target) then last = os.clock() callback() end
-    end))
+    local list = UI_Elements._RightClickTargets
+    list[#list + 1] = { target = target, cb = callback }
+    if not UI_Elements._RightClickConn then
+        local last = 0
+        UI_Elements._RightClickConn = UserInputService.InputBegan:Connect(function(input)
+            if input.UserInputType ~= Enum.UserInputType.MouseButton2 then return end
+            if os.clock() - last < 0.2 then return end
+            local targets = UI_Elements._RightClickTargets
+            for i = #targets, 1, -1 do
+                local e = targets[i]
+                if not e.target:IsDescendantOf(game) then
+                    table.remove(targets, i)
+                elseif UI_Elements._CursorOver(e.target) then
+                    last = os.clock() e.cb() break
+                end
+            end
+        end)
+        table.insert(connections, UI_Elements._RightClickConn)
+    end
 end
 UI_Elements._NewHeart = function(parent, key, position)
     local hit = Instance.new("TextButton", parent)
@@ -2211,7 +2271,11 @@ UI_Elements._NewHeart = function(parent, key, position)
         for _, p in ipairs(fallbackParts) do p.BackgroundColor3 = col end
         if glow then
             glow.ImageColor3 = col
-            TweenService:Create(glow, TweenInfo.new(0.3), { ImageTransparency = on and 0.55 or 1 }):Play()
+            if wasOn ~= nil and wasOn ~= on then
+                TweenService:Create(glow, TweenInfo.new(0.3), { ImageTransparency = on and 0.55 or 1 }):Play()
+            else
+                glow.ImageTransparency = on and 0.55 or 1
+            end
         end
         if wasOn ~= nil and on ~= wasOn then play(on) end
         wasOn = on
@@ -2236,15 +2300,16 @@ local function CreateToggle(parent, text, default, callback)
     local state = default
     local favRec = nil
     local function setState(newState, silent)
+        if UI_Elements._BulkLoading and newState == state then return end
         state = newState local circlePos = state and UDim2.new(0, 23, 0.5, -7) or UDim2.new(0, 3, 0.5, -7)
         if state then btn.BackgroundColor3 = Color3.fromRGB(255, 255, 255) grad.Enabled = true else btn.BackgroundColor3 = ToggleOffColor grad.Enabled = false end
-        if Settings.AnimationsEnabled then
+        if Settings.AnimationsEnabled and not UI_Elements._BulkLoading then
             TweenService:Create(circle, TweenInfo.new(0.3, Enum.EasingStyle.Back, Enum.EasingDirection.Out), {Position = circlePos}):Play()
         else
             circle.Position = circlePos
         end
         if favRec then for _, m in ipairs(favRec.mirrors) do m(state, true) end end
-        if UI_Elements._RefreshFavoritesCards then UI_Elements._RefreshFavoritesCards() end
+        if UI_Elements._RefreshFavoritesCards and not UI_Elements._BulkLoading then UI_Elements._RefreshFavoritesCards() end
         if not silent then callback(state) end
     end
     btn.MouseButton1Click:Connect(function() setState(not state) end)
@@ -2291,29 +2356,34 @@ local function CreateSlider(parent, text, min, max, default, callback)
         local percent=math.clamp((input.Position.X-bar.AbsolutePosition.X)/bar.AbsoluteSize.X,0,1)
         setVal(min+(max-min)*percent)
     end
+    local dragConns, startDrag = {}, nil
     local function stopDragging()
         dragging=false dragInput=nil dragTouch=false
+        for i = #dragConns, 1, -1 do dragConns[i]:Disconnect() dragConns[i] = nil end
     end
     btn.InputBegan:Connect(function(input)
         if input.UserInputType==Enum.UserInputType.MouseButton1 or input.UserInputType==Enum.UserInputType.Touch then
             if dragging then return end
             dragging=true dragInput=input dragTouch=input.UserInputType==Enum.UserInputType.Touch
+            startDrag()
             setFromInput(input)
         end
     end)
-    table.insert(connections,UserInputService.InputChanged:Connect(function(input)
-        if not dragging then return end
-        if (dragTouch and input==dragInput) or (not dragTouch and input.UserInputType==Enum.UserInputType.MouseMovement) then
-            setFromInput(input)
-        end
-    end))
-    table.insert(connections,UserInputService.InputEnded:Connect(function(input)
-        if not dragging then return end
-        if (dragTouch and input==dragInput) or (not dragTouch and input.UserInputType==Enum.UserInputType.MouseButton1) then
-            setFromInput(input) stopDragging()
-        end
-    end))
-    table.insert(connections,UserInputService.WindowFocusReleased:Connect(stopDragging))
+    startDrag = function()
+        dragConns[#dragConns+1] = UserInputService.InputChanged:Connect(function(input)
+            if not dragging then return end
+            if (dragTouch and input==dragInput) or (not dragTouch and input.UserInputType==Enum.UserInputType.MouseMovement) then
+                setFromInput(input)
+            end
+        end)
+        dragConns[#dragConns+1] = UserInputService.InputEnded:Connect(function(input)
+            if not dragging then return end
+            if (dragTouch and input==dragInput) or (not dragTouch and input.UserInputType==Enum.UserInputType.MouseButton1) then
+                setFromInput(input) stopDragging()
+            end
+        end)
+        dragConns[#dragConns+1] = UserInputService.WindowFocusReleased:Connect(stopDragging)
+    end
     setVal(default,true)
     favRec = UI_Elements._Record(parent, "slider", { text, min, max, default, callback }, setVal, function() return curVal end)
     return setVal
@@ -2857,7 +2927,7 @@ end)
 UI_Elements.dropdownDeviceMode = CreateDropdown(SettingsPage, "Device Mode", {"PC", "Phone"}, Settings.DeviceMode, function(val)
     Settings.DeviceMode = val
     local scale = (val == "Phone") and 0.85 or 1.0
-    MainUIScale.Scale = scale
+    MainUIScale.Scale = isMenuOpen and (scale * ((Settings.UIScale or 100) / 100)) or scale
     if isMenuOpen then
         MainFrame.Position = ComputeOpenMenuPosition()
     else
@@ -3036,7 +3106,14 @@ UI_Elements._RefreshFavoritesVisuals = function()
     end
     UI_Elements._RefreshFavoritesCards()
 end
-UI_Elements._RebuildMainFavorites = function()
+UI_Elements._RebuildMainFavorites = function(force)
+    Settings.Favorites = Settings.Favorites or {}
+    local sigKeys = {}
+    for k, v in pairs(Settings.Favorites) do if v then sigKeys[#sigKeys + 1] = k end end
+    table.sort(sigKeys)
+    local sig = table.concat(sigKeys, ";")
+    if not force and UI_Elements._FavSig == sig then return end
+    UI_Elements._FavSig = sig
     for _, c in ipairs(favSection:GetChildren()) do
         if c.Name == "FavCard" or c.Name == "FavMirror" then c:Destroy() end
     end
@@ -3212,18 +3289,26 @@ local function drop(key)
     E.owned[key] = nil
     if obj then pcall(function() obj:Destroy() end) end
 end
+local function same(a, b)
+    if typeof(a) == "number" and typeof(b) == "number" then return math.abs(a - b) < 0.01 end
+    if typeof(a) == "Color3" and typeof(b) == "Color3" then
+        return math.abs(a.R - b.R) < 0.006 and math.abs(a.G - b.G) < 0.006 and math.abs(a.B - b.B) < 0.006
+    end
+    return a == b
+end
 local function assign(key, value)
-    local current = Lighting[key]
+    local ok, current = pcall(function() return Lighting[key] end)
+    if not ok then return end
     local rec = E.props[key]
     if not rec then rec = {base = current} E.props[key] = rec
-    elseif current ~= rec.applied then rec.base = current end
-    if current ~= value then Lighting[key] = value end
+    elseif not same(current, rec.applied) then rec.base = current end
+    if not same(current, value) then pcall(function() Lighting[key] = value end) end
     rec.applied = value
 end
 local function release(key)
     local rec = E.props[key]
     if not rec then return end
-    if Lighting[key] == rec.applied then Lighting[key] = rec.base end
+    pcall(function() Lighting[key] = rec.base end)
     E.props[key] = nil
 end
 local skyProps = {"Brightness", "ExposureCompensation", "Ambient", "OutdoorAmbient", "ColorShift_Top", "ColorShift_Bottom", "ClockTime", "EnvironmentDiffuseScale", "EnvironmentSpecularScale"}
@@ -3285,7 +3370,7 @@ local function apply()
             drop("sky") drop("atmo") drop("cc")
             for _, key in ipairs(skyProps) do release(key) end
             for obj, enabled in pairs(E.effects) do
-                pcall(function() if obj.Enabled == false then obj.Enabled = enabled end end)
+                pcall(function() obj.Enabled = enabled end)
                 E.effects[obj] = nil
             end
         end
@@ -3433,7 +3518,7 @@ local function BuildEssentialHUD()
     local hudKiller = Instance.new("TextLabel", hudContainer) hudKiller.LayoutOrder = 4 hudKiller.Size = UDim2.new(0, 130, 0, 18) hudKiller.BackgroundTransparency = 1 hudKiller.Text = "Killer: Unknown" hudKiller.TextColor3 = TextColor hudKiller.TextSize = 12 hudKiller.Font = Enum.Font.GothamBold hudKiller.TextXAlignment = Enum.TextXAlignment.Left hudKiller.AutomaticSize = Enum.AutomaticSize.X
     hudContainer.Parent = ScreenGui
     HUDState.container, HUDState.title, HUDState.fps, HUDState.ping, HUDState.killer = hudContainer, hudTitle, hudFPS, hudPing, hudKiller
-    ApplyTheme()
+    ApplyTheme(Settings.ThemeType, true, true)
 end
 
 local function RefreshHUDVisibility()
@@ -3743,7 +3828,9 @@ UI_Elements._InitSoundPlayer = function()
 
     local function parse(value)
         value=tostring(value or "")
-        return value:match("^%s*(%d+)%s*$") or value:match("^rbxassetid://(%d+)$")
+        local id = value:match("^%s*(%d+)%s*$") or value:match("^rbxassetid://(%d+)$")
+        if id and (tonumber(id) or 0) <= 0 then return nil end
+        return id
     end
     local function refreshText()
         smallTitle.Text=state.title
@@ -5968,6 +6055,57 @@ UI_Elements._GetActiveProfile = function() return CurrentConfigName end
 local SetConfigNameText = CreateInput(ProfilesPage, "Enter Config Name...", function(val) CurrentConfigName = val end)
 local StatusLabel = CreateLabel(ProfilesPage, "Status: Ready")
 local ConfigListSection = CreateDropdownSection(ProfilesPage, "Available Configs")
+-- RENAME (pencil next to each config): the pencil swaps the row for a name field; Enter confirms, empty/Esc cancels.
+UI_Elements._AttachRename = function(btn, cfgName)
+    btn.TextXAlignment = Enum.TextXAlignment.Left
+    local pad = Instance.new("UIPadding", btn) pad.PaddingLeft = UDim.new(0, 10) pad.PaddingRight = UDim.new(0, 34)
+    local pencil = Instance.new("TextButton", btn)
+    pencil.Name = "RenamePencil" pencil.Text = "" pencil.AutoButtonColor = false
+    pencil.AnchorPoint = Vector2.new(1, 0.5) pencil.Position = UDim2.new(1, 30, 0.5, 0) pencil.Size = UDim2.fromOffset(28, 24)
+    pencil.BackgroundTransparency = 1 pencil.ZIndex = btn.ZIndex + 2
+    local parts = {}
+    local function bar(w, h, x, y, rot, round)
+        local f = Instance.new("Frame", pencil)
+        f.AnchorPoint = Vector2.new(0.5, 0.5) f.Size = UDim2.fromOffset(w, h) f.Position = UDim2.new(0.5, x, 0.5, y)
+        f.Rotation = rot f.BorderSizePixel = 0 f.BackgroundColor3 = TextMuted f.ZIndex = pencil.ZIndex
+        if round then Instance.new("UICorner", f).CornerRadius = UDim.new(0, 1) end
+        parts[#parts + 1] = f
+    end
+    bar(4, 11, 1, -1, 45, true)
+    bar(4, 3, -4, 4, 45, false)
+    bar(8, 1, 1, 6, 0, false)
+    pencil.MouseEnter:Connect(function() for _, p in ipairs(parts) do p.BackgroundColor3 = TextColor end end)
+    pencil.MouseLeave:Connect(function() for _, p in ipairs(parts) do p.BackgroundColor3 = TextMuted end end)
+    pencil.MouseButton1Click:Connect(function()
+        if btn:FindFirstChild("RenameBox") then return end
+        local box = Instance.new("TextBox", btn)
+        box.Name = "RenameBox" box.AnchorPoint = Vector2.new(0, 0.5) box.Size = UDim2.new(1, 28, 1, -8) box.Position = UDim2.new(0, -6, 0.5, 0)
+        box.BackgroundColor3 = BgMain box.BorderSizePixel = 0 box.ZIndex = btn.ZIndex + 3
+        box.Text = cfgName box.PlaceholderText = "New name..." box.ClearTextOnFocus = false
+        box.TextColor3 = TextColor box.PlaceholderColor3 = TextMuted box.Font = Enum.Font.GothamSemibold box.TextSize = 12
+        box.TextXAlignment = Enum.TextXAlignment.Left
+        Instance.new("UICorner", box).CornerRadius = UDim.new(0, 6)
+        local bp = Instance.new("UIPadding", box) bp.PaddingLeft = UDim.new(0, 8)
+        box:CaptureFocus()
+        box.FocusLost:Connect(function(enter)
+            local new = tostring(box.Text or ""):gsub("[^%w_%-]", ""):sub(1, 24)
+            box:Destroy()
+            if not enter or new == "" or new == cfgName then return end
+            local oldPath = configFolder .. "/" .. cfgName .. ".json"
+            local newPath = configFolder .. "/" .. new .. ".json"
+            local ok = pcall(function()
+                if isfile(newPath) then error("exists") end
+                writefile(newPath, readfile(oldPath))
+                delfile(oldPath)
+            end)
+            if not ok then UI_Elements._ConfigStatus("Status: Error - can't rename (name taken?)") return end
+            if CurrentConfigName == cfgName then CurrentConfigName = new SetConfigNameText(new) end
+            UI_Elements._ConfigStatus("Status: Renamed '" .. cfgName .. "' to '" .. new .. "'")
+            UI_Elements._RefreshConfigList()
+        end)
+    end)
+end
+
 local function RefreshConfigList()
     for _, child in ipairs(ConfigListSection:GetChildren()) do if child:IsA("TextButton") and child.Name == "CfgFileBtn" then child:Destroy() end end
     local files = GetConfigs()
@@ -5975,9 +6113,12 @@ local function RefreshConfigList()
         local btn = CreateButton(ConfigListSection, cfgName, false, function() SetConfigNameText(cfgName) StatusLabel("Status: Selected '" .. cfgName .. "'") end)
         btn.BackgroundColor3 = BgDark
         btn.Name = "CfgFileBtn"
+        UI_Elements._AttachRename(btn, cfgName)
     end
-    ApplyTheme()
+    ApplyTheme(Settings.ThemeType, true, true)
 end
+UI_Elements._ConfigStatus = StatusLabel
+UI_Elements._RefreshConfigList = RefreshConfigList
 CreateButton(ProfilesPage, "Save Config", false, function()
     if CurrentConfigName == "" or CurrentConfigName:match("^%s*$") then StatusLabel("Status: Error - Name cannot be empty!") return end
     local files = GetConfigs() local exists = false
@@ -5989,123 +6130,130 @@ UI_Elements._FlushBulkLoad = function()
     local pSky, pGfx, pEsp = UI_Elements._PendingSky, UI_Elements._PendingLowGFX, UI_Elements._PendingWorldESP
     UI_Elements._PendingSky, UI_Elements._PendingLowGFX, UI_Elements._PendingWorldESP = nil, nil, nil
     task.spawn(function()
+        task.wait(0.1)
         if pSky and EnforceSkybox then pcall(EnforceSkybox) end
-        task.wait()
+        task.wait(0.25)
         if pGfx then pcall(RefreshLowGraphics) end
-        task.wait()
+        task.wait(0.25)
         if pEsp and UI_Elements._RefreshWorldESP then pcall(UI_Elements._RefreshWorldESP) end
     end)
 end
 
 local function LoadSelectedProfile()
-    if CurrentConfigName == "" then return end
+    if CurrentConfigName == "" or UI_Elements._LoadingNow then return end
+    UI_Elements._LoadingNow = true
     local path = configFolder .. "/" .. CurrentConfigName .. ".json"
     pcall(function()
         if readfile and isfile and isfile(path) then
             local data = HttpService:JSONDecode(readfile(path))
             if type(data) == "table" then
+                local prevLookSig = tostring(Settings.ThemeType) .. "|" .. tostring(Settings.AccentR) .. "|" .. tostring(Settings.AccentG) .. "|" .. tostring(Settings.AccentB)
+                local loadClock = os.clock()
+                local function Y()
+                    if os.clock() - loadClock > 0.004 then task.wait() loadClock = os.clock() end
+                end
                 UI_Elements._BulkLoading = true
-                if UI_Elements.toggleManiac then UI_Elements.toggleManiac(data.ManiacESP or false) end
-                if UI_Elements.sliderMR then UI_Elements.sliderMR(data.ManiacR or 239) end
-                if UI_Elements.sliderMG then UI_Elements.sliderMG(data.ManiacG or 68) end
-                if UI_Elements.sliderMB then UI_Elements.sliderMB(data.ManiacB or 68) end
-                if UI_Elements.sliderManiacOpacity then UI_Elements.sliderManiacOpacity(data.ManiacOpacity or 50) end
-                if UI_Elements.toggleSurvivor then UI_Elements.toggleSurvivor(data.SurvivorESP or false) end
-                if UI_Elements.sliderSR then UI_Elements.sliderSR(data.SurvivorR or 34) end
-                if UI_Elements.sliderSG then UI_Elements.sliderSG(data.SurvivorG or 197) end
-                if UI_Elements.sliderSB then UI_Elements.sliderSB(data.SurvivorB or 94) end
-                if UI_Elements.sliderSurvivorOpacity then UI_Elements.sliderSurvivorOpacity(data.SurvivorOpacity or 50) end
-                if UI_Elements.toggleGenerator then UI_Elements.toggleGenerator(data.GeneratorESP or false) end
-                if UI_Elements.sliderGR then UI_Elements.sliderGR(data.GeneratorR or 255) end
-                if UI_Elements.sliderGG then UI_Elements.sliderGG(data.GeneratorG or 255) end
-                if UI_Elements.sliderGB then UI_Elements.sliderGB(data.GeneratorB or 0) end
-                if UI_Elements.sliderGeneratorOpacity then UI_Elements.sliderGeneratorOpacity(data.GeneratorOpacity or 50) end
-                if UI_Elements.togglePallet then UI_Elements.togglePallet(data.PalletESP or false) end
-                if UI_Elements.sliderPR then UI_Elements.sliderPR(data.PalletR or 255) end
-                if UI_Elements.sliderPG then UI_Elements.sliderPG(data.PalletG or 128) end
-                if UI_Elements.sliderPB then UI_Elements.sliderPB(data.PalletB or 0) end
-                if UI_Elements.sliderPalletOpacity then UI_Elements.sliderPalletOpacity(data.PalletOpacity or 50) end
-                if UI_Elements.toggleHook then UI_Elements.toggleHook(data.HookESP or false) end
-                if UI_Elements.sliderHookR then UI_Elements.sliderHookR(data.HookR or 255) end
-                if UI_Elements.sliderHookG then UI_Elements.sliderHookG(data.HookG or 0) end
-                if UI_Elements.sliderHookB then UI_Elements.sliderHookB(data.HookB or 0) end
-                if UI_Elements.sliderHookOpacity then UI_Elements.sliderHookOpacity(data.HookOpacity or 50) end
-                if UI_Elements.sliderWindowR then UI_Elements.sliderWindowR(data.WindowR or 170) end
-                if UI_Elements.sliderWindowG then UI_Elements.sliderWindowG(data.WindowG or 85) end
-                if UI_Elements.sliderWindowB then UI_Elements.sliderWindowB(data.WindowB or 255) end
-                if UI_Elements.toggleWindow then UI_Elements.toggleWindow(data.WindowESP or false) end
-                if UI_Elements.sliderWindowOpacity then UI_Elements.sliderWindowOpacity(data.WindowOpacity or 30) end
-                if UI_Elements.toggleTrapBox then UI_Elements.toggleTrapBox(data.TrapBox ~= false) end
-                if UI_Elements.toggleTrapLabel then UI_Elements.toggleTrapLabel(data.TrapLabel ~= false) end
-                if UI_Elements.sliderTrapOpacity then UI_Elements.sliderTrapOpacity(data.TrapOpacity or 25) end
-                if UI_Elements.sliderTrapTextSize then UI_Elements.sliderTrapTextSize(data.TrapTextSize or 13) end
-                if UI_Elements.toggleTrap then UI_Elements.toggleTrap(data.TrapESP == true) end
+                if UI_Elements.toggleManiac then UI_Elements.toggleManiac(data.ManiacESP or false) end Y()
+                if UI_Elements.sliderMR then UI_Elements.sliderMR(data.ManiacR or 239) end Y()
+                if UI_Elements.sliderMG then UI_Elements.sliderMG(data.ManiacG or 68) end Y()
+                if UI_Elements.sliderMB then UI_Elements.sliderMB(data.ManiacB or 68) end Y()
+                if UI_Elements.sliderManiacOpacity then UI_Elements.sliderManiacOpacity(data.ManiacOpacity or 50) end Y()
+                if UI_Elements.toggleSurvivor then UI_Elements.toggleSurvivor(data.SurvivorESP or false) end Y()
+                if UI_Elements.sliderSR then UI_Elements.sliderSR(data.SurvivorR or 34) end Y()
+                if UI_Elements.sliderSG then UI_Elements.sliderSG(data.SurvivorG or 197) end Y()
+                if UI_Elements.sliderSB then UI_Elements.sliderSB(data.SurvivorB or 94) end Y()
+                if UI_Elements.sliderSurvivorOpacity then UI_Elements.sliderSurvivorOpacity(data.SurvivorOpacity or 50) end Y()
+                if UI_Elements.toggleGenerator then UI_Elements.toggleGenerator(data.GeneratorESP or false) end Y()
+                if UI_Elements.sliderGR then UI_Elements.sliderGR(data.GeneratorR or 255) end Y()
+                if UI_Elements.sliderGG then UI_Elements.sliderGG(data.GeneratorG or 255) end Y()
+                if UI_Elements.sliderGB then UI_Elements.sliderGB(data.GeneratorB or 0) end Y()
+                if UI_Elements.sliderGeneratorOpacity then UI_Elements.sliderGeneratorOpacity(data.GeneratorOpacity or 50) end Y()
+                if UI_Elements.togglePallet then UI_Elements.togglePallet(data.PalletESP or false) end Y()
+                if UI_Elements.sliderPR then UI_Elements.sliderPR(data.PalletR or 255) end Y()
+                if UI_Elements.sliderPG then UI_Elements.sliderPG(data.PalletG or 128) end Y()
+                if UI_Elements.sliderPB then UI_Elements.sliderPB(data.PalletB or 0) end Y()
+                if UI_Elements.sliderPalletOpacity then UI_Elements.sliderPalletOpacity(data.PalletOpacity or 50) end Y()
+                if UI_Elements.toggleHook then UI_Elements.toggleHook(data.HookESP or false) end Y()
+                if UI_Elements.sliderHookR then UI_Elements.sliderHookR(data.HookR or 255) end Y()
+                if UI_Elements.sliderHookG then UI_Elements.sliderHookG(data.HookG or 0) end Y()
+                if UI_Elements.sliderHookB then UI_Elements.sliderHookB(data.HookB or 0) end Y()
+                if UI_Elements.sliderHookOpacity then UI_Elements.sliderHookOpacity(data.HookOpacity or 50) end Y()
+                if UI_Elements.sliderWindowR then UI_Elements.sliderWindowR(data.WindowR or 170) end Y()
+                if UI_Elements.sliderWindowG then UI_Elements.sliderWindowG(data.WindowG or 85) end Y()
+                if UI_Elements.sliderWindowB then UI_Elements.sliderWindowB(data.WindowB or 255) end Y()
+                if UI_Elements.toggleWindow then UI_Elements.toggleWindow(data.WindowESP or false) end Y()
+                if UI_Elements.sliderWindowOpacity then UI_Elements.sliderWindowOpacity(data.WindowOpacity or 30) end Y()
+                if UI_Elements.toggleTrapBox then UI_Elements.toggleTrapBox(data.TrapBox ~= false) end Y()
+                if UI_Elements.toggleTrapLabel then UI_Elements.toggleTrapLabel(data.TrapLabel ~= false) end Y()
+                if UI_Elements.sliderTrapOpacity then UI_Elements.sliderTrapOpacity(data.TrapOpacity or 25) end Y()
+                if UI_Elements.sliderTrapTextSize then UI_Elements.sliderTrapTextSize(data.TrapTextSize or 13) end Y()
+                if UI_Elements.toggleTrap then UI_Elements.toggleTrap(data.TrapESP == true) end Y()
 
-                if UI_Elements.toggleGate then UI_Elements.toggleGate(data.GateESP or false) end
-                if UI_Elements.sliderGateR then UI_Elements.sliderGateR(data.GateR or 0) end
-                if UI_Elements.sliderGateG then UI_Elements.sliderGateG(data.GateG or 255) end
-                if UI_Elements.sliderGateB then UI_Elements.sliderGateB(data.GateB or 255) end
-                if UI_Elements.sliderGateOpacity then UI_Elements.sliderGateOpacity(data.GateOpacity or 50) end
+                if UI_Elements.toggleGate then UI_Elements.toggleGate(data.GateESP or false) end Y()
+                if UI_Elements.sliderGateR then UI_Elements.sliderGateR(data.GateR or 0) end Y()
+                if UI_Elements.sliderGateG then UI_Elements.sliderGateG(data.GateG or 255) end Y()
+                if UI_Elements.sliderGateB then UI_Elements.sliderGateB(data.GateB or 255) end Y()
+                if UI_Elements.sliderGateOpacity then UI_Elements.sliderGateOpacity(data.GateOpacity or 50) end Y()
 
-                if UI_Elements.dropdownTextureQuality then UI_Elements.dropdownTextureQuality(data.TextureQuality or "Balanced") end
-                if UI_Elements.toggleLowGraphics then UI_Elements.toggleLowGraphics(data.LowGraphics or false) end
-                if UI_Elements.toggleNoStopEmote then UI_Elements.toggleNoStopEmote(data.NoStopEmote or false) end
+                if UI_Elements.dropdownTextureQuality then UI_Elements.dropdownTextureQuality(data.TextureQuality or "Balanced") end Y()
+                if UI_Elements.toggleLowGraphics then UI_Elements.toggleLowGraphics(data.LowGraphics or false) end Y()
+                if UI_Elements.toggleNoStopEmote then UI_Elements.toggleNoStopEmote(data.NoStopEmote or false) end Y()
 
-                if UI_Elements.sliderMoonAngle then UI_Elements.sliderMoonAngle(data.MoonwalkAngle or 18) end
-                if UI_Elements.sliderMoonSpeed then UI_Elements.sliderMoonSpeed(data.MoonwalkSpeed or 22) end
-                if UI_Elements.toggleMoonAlways then UI_Elements.toggleMoonAlways(data.MoonwalkAlways or false) end
-                if UI_Elements.toggleMoonwalk then UI_Elements.toggleMoonwalk(data.Moonwalk or false) end
-                if UI_Elements.sliderSmoothSlide then UI_Elements.sliderSmoothSlide(data.SmoothSlideIntensity or 65) end
-                if UI_Elements.sliderSmoothRot then UI_Elements.sliderSmoothRot(data.SmoothRotationSpeed or 45) end
-                if UI_Elements.sliderSmoothInertia then UI_Elements.sliderSmoothInertia(data.SmoothInertia or 65) end
-                if UI_Elements.sliderSmoothRecovery then UI_Elements.sliderSmoothRecovery(data.SmoothRecoverySpeed or 50) end
-                if UI_Elements.sliderSmoothCamera then UI_Elements.sliderSmoothCamera(data.SmoothCameraSmoothness or 50) end
-                if UI_Elements.toggleSmootherMovement then UI_Elements.toggleSmootherMovement(data.SmootherMovement or false) end
+                if UI_Elements.sliderMoonAngle then UI_Elements.sliderMoonAngle(data.MoonwalkAngle or 18) end Y()
+                if UI_Elements.sliderMoonSpeed then UI_Elements.sliderMoonSpeed(data.MoonwalkSpeed or 22) end Y()
+                if UI_Elements.toggleMoonAlways then UI_Elements.toggleMoonAlways(data.MoonwalkAlways or false) end Y()
+                if UI_Elements.toggleMoonwalk then UI_Elements.toggleMoonwalk(data.Moonwalk or false) end Y()
+                if UI_Elements.sliderSmoothSlide then UI_Elements.sliderSmoothSlide(data.SmoothSlideIntensity or 65) end Y()
+                if UI_Elements.sliderSmoothRot then UI_Elements.sliderSmoothRot(data.SmoothRotationSpeed or 45) end Y()
+                if UI_Elements.sliderSmoothInertia then UI_Elements.sliderSmoothInertia(data.SmoothInertia or 65) end Y()
+                if UI_Elements.sliderSmoothRecovery then UI_Elements.sliderSmoothRecovery(data.SmoothRecoverySpeed or 50) end Y()
+                if UI_Elements.sliderSmoothCamera then UI_Elements.sliderSmoothCamera(data.SmoothCameraSmoothness or 50) end Y()
+                if UI_Elements.toggleSmootherMovement then UI_Elements.toggleSmootherMovement(data.SmootherMovement or false) end Y()
 
-                if UI_Elements.keybindMenu then UI_Elements.keybindMenu(data.MenuKeybind or "RightShift") end
+                if UI_Elements.keybindMenu then UI_Elements.keybindMenu(data.MenuKeybind or "RightShift") end Y()
                 local loadedTheme = (type(data.ThemeType) == "string" and Themes[data.ThemeType]) and data.ThemeType or "Winter"
                 Settings.ThemeType = loadedTheme
-                if UI_Elements.themeSelector then UI_Elements.themeSelector(loadedTheme, true) end
+                if UI_Elements.themeSelector then UI_Elements.themeSelector(loadedTheme, true) end Y()
                 if UI_Elements.pillPositionSelector then
                     Settings.PillPosition = data.PillPosition or "BottomCenter"
                     UI_Elements.pillPositionSelector(Settings.PillPosition, true)
                     ApplyPillPosition(false)
                 end
 
-                if UI_Elements.sliderSet then UI_Elements.sliderSet(data.FOV or 70) end
-                if UI_Elements.toggleFOVSet then UI_Elements.toggleFOVSet(data.FOVEnabled or false) end
-                if UI_Elements.dropdownSpeedMode then UI_Elements.dropdownSpeedMode(data.SpeedMode or "Legit") end
-                if UI_Elements.sliderSpeedSet then UI_Elements.sliderSpeedSet(data.SpeedValue or 22) end
-                if UI_Elements.toggleSpeedSet then UI_Elements.toggleSpeedSet(data.Speedhack or false) end
-                if UI_Elements.toggleJumphack then UI_Elements.toggleJumphack(data.Jumphack or false) end
-                if UI_Elements.sliderJumpPower then UI_Elements.sliderJumpPower(data.JumpPower or 50) end
-                if UI_Elements.toggleFlashlight then UI_Elements.toggleFlashlight(data.Flashlight or false) end
-                if UI_Elements.sliderFlashRange then UI_Elements.sliderFlashRange(data.FlashRange or 60) end
-                if UI_Elements.sliderFlashR then UI_Elements.sliderFlashR(data.FlashR or 255) end
-                if UI_Elements.sliderFlashG then UI_Elements.sliderFlashG(data.FlashG or 255) end
-                if UI_Elements.sliderFlashB then UI_Elements.sliderFlashB(data.FlashB or 255) end
-                if UI_Elements.toggleNoclip then UI_Elements.toggleNoclip(data.Noclip or false) end
-                if UI_Elements.toggleFog then UI_Elements.toggleFog(data.CustomFog or false) end
-                if UI_Elements.sliderFogStart then UI_Elements.sliderFogStart(data.FogStart or 0) end
-                if UI_Elements.sliderFogEnd then UI_Elements.sliderFogEnd(data.FogEnd or 1000) end
-                if UI_Elements.sliderFogR then UI_Elements.sliderFogR(data.FogR or 150) end
-                if UI_Elements.sliderFogG then UI_Elements.sliderFogG(data.FogG or 150) end
-                if UI_Elements.sliderFogB then UI_Elements.sliderFogB(data.FogB or 150) end
-                if UI_Elements.soundPlayerId then UI_Elements.soundPlayerId(data.SoundPlayerId or "") end
-                if UI_Elements.soundPlayerVolume then UI_Elements.soundPlayerVolume(data.SoundPlayerVolume or 50) end
-                if UI_Elements.soundPlayerDesign then UI_Elements.soundPlayerDesign(data.SoundPlayerDesign or "Compact") end
-                if UI_Elements.soundPlayerCollapsed then UI_Elements.soundPlayerCollapsed(data.SoundPlayerCollapsed == true) end
-                if UI_Elements.toggleSoundPlayer then UI_Elements.toggleSoundPlayer(data.SoundPlayerEnabled or false) end
-                if UI_Elements.toggleStretch then UI_Elements.toggleStretch(data.Stretch or false) end
-                if UI_Elements.dropdownStretch then UI_Elements.dropdownStretch(data.StretchPreset or "16:9 (Default)") end
-                if UI_Elements.sliderStretch then UI_Elements.sliderStretch(data.StretchCustom or 100) end
-                if UI_Elements.toggleCrosshair then UI_Elements.toggleCrosshair(data.Crosshair or false) end
-                if UI_Elements.sliderCHLength then UI_Elements.sliderCHLength(data.CHLen or 10) end
-                if UI_Elements.sliderCHWidth then UI_Elements.sliderCHWidth(data.CHWid or 2) end
-                if UI_Elements.sliderCHR then UI_Elements.sliderCHR(data.CHR or 0) end
-                if UI_Elements.sliderCHG then UI_Elements.sliderCHG(data.CHG or 255) end
-                if UI_Elements.sliderCHB then UI_Elements.sliderCHB(data.CHB or 0) end
-                if UI_Elements.presetDropdown then UI_Elements.presetDropdown(data.SkyPreset or "Default") end
+                if UI_Elements.sliderSet then UI_Elements.sliderSet(data.FOV or 70) end Y()
+                if UI_Elements.toggleFOVSet then UI_Elements.toggleFOVSet(data.FOVEnabled or false) end Y()
+                if UI_Elements.dropdownSpeedMode then UI_Elements.dropdownSpeedMode(data.SpeedMode or "Legit") end Y()
+                if UI_Elements.sliderSpeedSet then UI_Elements.sliderSpeedSet(data.SpeedValue or 22) end Y()
+                if UI_Elements.toggleSpeedSet then UI_Elements.toggleSpeedSet(data.Speedhack or false) end Y()
+                if UI_Elements.toggleJumphack then UI_Elements.toggleJumphack(data.Jumphack or false) end Y()
+                if UI_Elements.sliderJumpPower then UI_Elements.sliderJumpPower(data.JumpPower or 50) end Y()
+                if UI_Elements.toggleFlashlight then UI_Elements.toggleFlashlight(data.Flashlight or false) end Y()
+                if UI_Elements.sliderFlashRange then UI_Elements.sliderFlashRange(data.FlashRange or 60) end Y()
+                if UI_Elements.sliderFlashR then UI_Elements.sliderFlashR(data.FlashR or 255) end Y()
+                if UI_Elements.sliderFlashG then UI_Elements.sliderFlashG(data.FlashG or 255) end Y()
+                if UI_Elements.sliderFlashB then UI_Elements.sliderFlashB(data.FlashB or 255) end Y()
+                if UI_Elements.toggleNoclip then UI_Elements.toggleNoclip(data.Noclip or false) end Y()
+                if UI_Elements.toggleFog then UI_Elements.toggleFog(data.CustomFog or false) end Y()
+                if UI_Elements.sliderFogStart then UI_Elements.sliderFogStart(data.FogStart or 0) end Y()
+                if UI_Elements.sliderFogEnd then UI_Elements.sliderFogEnd(data.FogEnd or 1000) end Y()
+                if UI_Elements.sliderFogR then UI_Elements.sliderFogR(data.FogR or 150) end Y()
+                if UI_Elements.sliderFogG then UI_Elements.sliderFogG(data.FogG or 150) end Y()
+                if UI_Elements.sliderFogB then UI_Elements.sliderFogB(data.FogB or 150) end Y()
+                if UI_Elements.soundPlayerId then UI_Elements.soundPlayerId(data.SoundPlayerId or "") end Y()
+                if UI_Elements.soundPlayerVolume then UI_Elements.soundPlayerVolume(data.SoundPlayerVolume or 50) end Y()
+                if UI_Elements.soundPlayerDesign then UI_Elements.soundPlayerDesign(data.SoundPlayerDesign or "Compact") end Y()
+                if UI_Elements.soundPlayerCollapsed then UI_Elements.soundPlayerCollapsed(data.SoundPlayerCollapsed == true) end Y()
+                if UI_Elements.toggleSoundPlayer then UI_Elements.toggleSoundPlayer(data.SoundPlayerEnabled or false) end Y()
+                if UI_Elements.toggleStretch then UI_Elements.toggleStretch(data.Stretch or false) end Y()
+                if UI_Elements.dropdownStretch then UI_Elements.dropdownStretch(data.StretchPreset or "16:9 (Default)") end Y()
+                if UI_Elements.sliderStretch then UI_Elements.sliderStretch(data.StretchCustom or 100) end Y()
+                if UI_Elements.toggleCrosshair then UI_Elements.toggleCrosshair(data.Crosshair or false) end Y()
+                if UI_Elements.sliderCHLength then UI_Elements.sliderCHLength(data.CHLen or 10) end Y()
+                if UI_Elements.sliderCHWidth then UI_Elements.sliderCHWidth(data.CHWid or 2) end Y()
+                if UI_Elements.sliderCHR then UI_Elements.sliderCHR(data.CHR or 0) end Y()
+                if UI_Elements.sliderCHG then UI_Elements.sliderCHG(data.CHG or 255) end Y()
+                if UI_Elements.sliderCHB then UI_Elements.sliderCHB(data.CHB or 0) end Y()
+                if UI_Elements.presetDropdown then UI_Elements.presetDropdown(data.SkyPreset or "Default") end Y()
                 SkyboxState.ApplyingPreset = true
                 if UI_Elements.skyBrightnessSlider then UI_Elements.skyBrightnessSlider(data.SkyBright or 50) end
                 if UI_Elements.skyExposureSlider then UI_Elements.skyExposureSlider(data.SkyExp or 50) end
@@ -6117,24 +6265,28 @@ local function LoadSelectedProfile()
                 if UI_Elements.horBSlider then UI_Elements.horBSlider(data.HorB or 255) end
                 if UI_Elements.skyClockSlider then UI_Elements.skyClockSlider(data.SkyClock or 14) end
                 SkyboxState.ApplyingPreset = false
-                if UI_Elements.toggleSky then UI_Elements.toggleSky(data.SkyEnabled or false) end
-                if UI_Elements.toggleEnableHUD then UI_Elements.toggleEnableHUD(data.HUDEnabled or false) end
-                if UI_Elements.toggleShowFPS then UI_Elements.toggleShowFPS(data.HUDFPS ~= false) end
-                if UI_Elements.toggleShowPing then UI_Elements.toggleShowPing(data.HUDPing ~= false) end
-                if UI_Elements.toggleShowKiller then UI_Elements.toggleShowKiller(data.HUDKiller ~= false) end
-                if UI_Elements.sliderAccR then UI_Elements.sliderAccR(data.AccentR or 100) end
-                if UI_Elements.sliderAccG then UI_Elements.sliderAccG(data.AccentG or 100) end
-                if UI_Elements.sliderAccB then UI_Elements.sliderAccB(data.AccentB or 255) end
-                if UI_Elements.dropdownDeviceMode then UI_Elements.dropdownDeviceMode(data.DeviceMode or "PC") end
+                if UI_Elements.toggleSky then UI_Elements.toggleSky(data.SkyEnabled or false) end Y()
+                if UI_Elements.toggleEnableHUD then UI_Elements.toggleEnableHUD(data.HUDEnabled or false) end Y()
+                if UI_Elements.toggleShowFPS then UI_Elements.toggleShowFPS(data.HUDFPS ~= false) end Y()
+                if UI_Elements.toggleShowPing then UI_Elements.toggleShowPing(data.HUDPing ~= false) end Y()
+                if UI_Elements.toggleShowKiller then UI_Elements.toggleShowKiller(data.HUDKiller ~= false) end Y()
+                if UI_Elements.sliderAccR then UI_Elements.sliderAccR(data.AccentR or 100) end Y()
+                if UI_Elements.sliderAccG then UI_Elements.sliderAccG(data.AccentG or 100) end Y()
+                if UI_Elements.sliderAccB then UI_Elements.sliderAccB(data.AccentB or 255) end Y()
+                if UI_Elements.dropdownDeviceMode then UI_Elements.dropdownDeviceMode(data.DeviceMode or "PC") end Y()
+                if UI_Elements.sliderUIScale then UI_Elements.sliderUIScale(tonumber(data.UIScale) or 120) end Y()
+                if UI_Elements.toggleAnimations then UI_Elements.toggleAnimations(data.AnimationsEnabled ~= false) end Y()
                 Settings.Favorites = (type(data.Favorites) == "table") and data.Favorites or {}
-                ApplyTheme(Settings.ThemeType, false)
-                if UI_Elements._RebuildMainFavorites then UI_Elements._RebuildMainFavorites() end
-                if UI_Elements._RefreshFavoritesVisuals then UI_Elements._RefreshFavoritesVisuals() end
+                local newLookSig = tostring(Settings.ThemeType) .. "|" .. tostring(Settings.AccentR) .. "|" .. tostring(Settings.AccentG) .. "|" .. tostring(Settings.AccentB)
+                if newLookSig ~= prevLookSig then ApplyTheme(Settings.ThemeType, true) end
+                if UI_Elements._RebuildMainFavorites then UI_Elements._RebuildMainFavorites() end Y()
+                if UI_Elements._RefreshFavoritesVisuals then UI_Elements._RefreshFavoritesVisuals() end Y()
                 StatusLabel("Status: Loaded '" .. CurrentConfigName .. "'!")
             end
         else StatusLabel("Status: Error - Config not found!") end
     end)
     UI_Elements._BulkLoading = false
+    UI_Elements._LoadingNow = false
     UI_Elements._FlushBulkLoad()
 end
 CreateButton(ProfilesPage, "Load Config", false, function() LoadSelectedProfile() end)
@@ -6157,6 +6309,103 @@ RefreshConfigList()
 
 local sep = Instance.new("Frame", ProfilesPage) sep.Size = UDim2.new(1, 0, 0, 1) sep.BorderSizePixel = 0
 table.insert(ThemeElements.DarkStrokes, sep)
+
+-- SHARING: Copy Config copies the selected config as text; Import Config adds a config from the clipboard
+do
+    local PREFIX = "EssentialConfig|"
+    local function cleanName(n)
+        n = tostring(n or ""):gsub("[^%w_%-]", ""):sub(1, 24)
+        if n == "" then n = "Imported" end
+        return n
+    end
+    local function putToClipboard(text)
+        local getters = {
+            function() return setclipboard end, function() return toclipboard end,
+            function() return set_clipboard end, function() return Clipboard and Clipboard.set end,
+        }
+        for _, g in ipairs(getters) do
+            local okg, fn = pcall(g)
+            if okg and type(fn) == "function" and pcall(fn, text) then return true end
+        end
+        return false
+    end
+    local picker = Instance.new("Frame", ProfilesPage)
+    picker.Name = "CopyPicker" picker.BackgroundTransparency = 1 picker.Size = UDim2.new(1, 0, 0, 0)
+    picker.AutomaticSize = Enum.AutomaticSize.Y picker.Visible = false
+    local pickLayout = Instance.new("UIListLayout", picker) pickLayout.Padding = UDim.new(0, 4) pickLayout.SortOrder = Enum.SortOrder.LayoutOrder
+    local function clearPicker()
+        for _, c in ipairs(picker:GetChildren()) do
+            if c:IsA("GuiObject") then c:Destroy() end
+        end
+    end
+    local function addPickerButton(text, order, callback)
+        local b = Instance.new("TextButton", picker)
+        b.Size = UDim2.new(1, 0, 0, 34) b.LayoutOrder = order b.Text = text b.AutoButtonColor = false
+        b.BackgroundColor3 = BgDark b.TextColor3 = TextColor b.Font = Enum.Font.GothamSemibold b.TextSize = 13
+        Instance.new("UICorner", b).CornerRadius = UDim.new(0, 8)
+        local st = Instance.new("UIStroke", b) table.insert(ThemeElements.DarkStrokes, st)
+        b.MouseButton1Click:Connect(callback)
+        return b
+    end
+    local function copyConfig(name)
+        local ok, json = pcall(function() return readfile(configFolder .. "/" .. name .. ".json") end)
+        if not ok or type(json) ~= "string" then StatusLabel("Status: Error - config not found") return end
+        json = json:gsub("[\r\n]", "")
+        local text = PREFIX .. cleanName(name) .. "|" .. json
+        if putToClipboard(text) then
+            picker.Visible = false clearPicker()
+            StatusLabel("Status: Copied '" .. name .. "'")
+        else
+            -- no clipboard function in this executor: show the text so it can be selected and copied by hand
+            clearPicker()
+            local box = Instance.new("TextBox", picker)
+            box.Size = UDim2.new(1, 0, 0, 70) box.LayoutOrder = 1 box.BackgroundColor3 = BgDark box.BorderSizePixel = 0
+            box.TextColor3 = TextColor box.Font = Enum.Font.Code box.TextSize = 10 box.TextWrapped = true
+            box.MultiLine = true box.ClearTextOnFocus = false box.TextXAlignment = Enum.TextXAlignment.Left
+            box.TextYAlignment = Enum.TextYAlignment.Top box.Text = text
+            Instance.new("UICorner", box).CornerRadius = UDim.new(0, 8)
+            local bp = Instance.new("UIPadding", box) bp.PaddingLeft = UDim.new(0, 8) bp.PaddingTop = UDim.new(0, 6) bp.PaddingRight = UDim.new(0, 8)
+            StatusLabel("Status: No clipboard here - select the text below (Ctrl+A, Ctrl+C)")
+        end
+    end
+    CreateButton(ProfilesPage, "Copy Config", false, function()
+        if picker.Visible then picker.Visible = false clearPicker() return end
+        clearPicker()
+        local files = GetConfigs()
+        if #files == 0 then StatusLabel("Status: No configs to copy") return end
+        for i, name in ipairs(files) do
+            addPickerButton(name, i, function() copyConfig(name) end)
+        end
+        picker.Visible = true
+        StatusLabel("Status: Choose a config to copy")
+    end)
+    CreateButton(ProfilesPage, "Import Config", false, function()
+        local getClip
+        for _, g in ipairs({ function() return getclipboard end, function() return get_clipboard end, function() return fromclipboard end }) do
+            local okg, fn = pcall(g)
+            if okg and type(fn) == "function" then getClip = fn break end
+        end
+        if not getClip then StatusLabel("Status: Error - can't read clipboard") return end
+        local okc, raw = pcall(getClip)
+        raw = okc and tostring(raw or ""):gsub("^%s+", ""):gsub("%s+$", "") or ""
+        local name, json = raw:match("^EssentialConfig%|([^|]*)%|(.+)$")
+        if not json then StatusLabel("Status: Clipboard has no config") return end
+        local ok, data = pcall(function() return HttpService:JSONDecode(json) end)
+        if not ok or type(data) ~= "table" then StatusLabel("Status: Error - broken config data") return end
+        local files = GetConfigs()
+        if #files >= 5 then StatusLabel("Status: Error - Limit reached (Max 5 configs)!") return end
+        name = cleanName(name)
+        local taken = {}
+        for _, f in ipairs(files) do taken[f] = true end
+        local final, i = name, 1
+        while taken[final] do i = i + 1 final = name .. "_" .. i end
+        if not pcall(function() writefile(configFolder .. "/" .. final .. ".json", json) end) then
+            StatusLabel("Status: Error - can't write file") return
+        end
+        RefreshConfigList()
+        StatusLabel("Status: Imported '" .. final .. "'")
+    end)
+end
 
 -- ==============================================
 -- WINDOW ESP & THE BUTCHER TRAP ESP (NO RADIUS CIRCLE / NO KILLER HIGHLIGHT)
@@ -7190,8 +7439,15 @@ pcall(function()
             or n:match("^escapegate%d*$") ~= nil or n:match("^escapedoor%d*$") ~= nil
             or n:match("^gate%d*$") ~= nil
     end
+    local function HasExitLever(obj)
+        for _, c in ipairs(obj:GetChildren()) do
+            if ESPCompactName(c.Name) == "exitlever" then return true end
+        end
+        return false
+    end
     local function HasExitIdentity(obj)
         local n = ESPCompactName(obj.Name)
+        if obj:IsA("Model") and HasExitLever(obj) then return true end
         if n:match("^exitgate%d*$") or n:match("^exitdoor%d*$")
             or n:match("^escapegate%d*$") or n:match("^escapedoor%d*$") then return true end
         -- A generic Gate is NOT an exit merely because it is large or interactive.
@@ -7743,7 +7999,9 @@ pcall(function()
         if not part or not size then return nil end
         local width, depth = math.max(size.X, size.Z), math.min(size.X, size.Z)
         -- Heuristic guardrails, not a claimed map schema. Fail closed on building-sized models.
-        if width < 7 or size.Y < 6 or width > 80 or size.Y > 64 or depth > 40 then return nil end
+        if HasExitLever(gateObj) then
+            if width > 250 or size.Y > 200 then return nil end
+        elseif width < 7 or size.Y < 6 or width > 80 or size.Y > 64 or depth > 40 then return nil end
         return part
     end
     local function RegisterGate(gateObj)
@@ -7952,6 +8210,7 @@ local function UnloadScript()
     end
     UI_Elements._BulkLoading = false
     UI_Elements._PendingSky, UI_Elements._PendingLowGFX, UI_Elements._PendingWorldESP = nil, nil, nil
+    step(function() if UI_Elements._SetMenuMouse then UI_Elements._SetMenuMouse(false) end end)
 
     for _, name in ipairs({ "_CleanupWorldESP", "_CleanupObjectESP", "_CleanupFOV", "_CleanupMovement", "_CleanupSmootherMovement", "_CleanupBackground", "_CleanupSoundPlayer", "_StopMoonwalk" }) do
         step(function() if UI_Elements[name] then UI_Elements[name]() end end)
